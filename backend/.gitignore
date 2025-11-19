@@ -1,0 +1,10 @@
+# Ignora l'ambiente virtuale
+venv/
+/venv/
+
+# Ignora i file di configurazione dell'ambiente (contiene le password!)
+.env
+
+# Ignora le cache di Python
+__pycache__/
+*.pyc

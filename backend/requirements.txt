@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+SQLAlchemy
+python-dotenv
+fastapi-mail
+reportlab
+psycopg2-binary
