@@ -169,10 +169,26 @@ async def delete_special_event(
     db.commit()
     return event
 
-async def send_email_confirmation(email: str, booking_details: dict, db: Session):
+async def send_email_confirmation(email: str, booking_details: dict):
     """
     Prepara e invia l'email di conferma.
+    Questa funzione ora è completamente autonoma per evitare problemi di stato su Render.
     """
+    # Ricrea la configurazione della mail e la connessione al DB all'interno del task
+    # per garantire che sia thread-safe e non causi crash.
+    conf_local = ConnectionConfig(
+        MAIL_USERNAME=os.getenv("MAIL_USERNAME"),
+        MAIL_PASSWORD=os.getenv("MAIL_PASSWORD"),
+        MAIL_FROM=os.getenv("MAIL_FROM"),
+        MAIL_PORT=int(os.getenv("MAIL_PORT", 587)),
+        MAIL_SERVER=os.getenv("MAIL_SERVER"),
+        MAIL_STARTTLS=True,
+        MAIL_SSL_TLS=False,
+        USE_CREDENTIALS=True,
+        VALIDATE_CERTS=True
+    )
+    db = next(get_db())
+
     # Formattiamo la data e l'ora per una migliore leggibilità
     booking_date_formatted = booking_details['booking_date'].strftime('%d/%m/%Y')
     booking_time_formatted = booking_details['booking_time'].strftime('%H:%M') if booking_details['booking_time'] else "N/D"
@@ -261,7 +277,7 @@ async def send_email_confirmation(email: str, booking_details: dict, db: Session
         subtype=MessageType.html
     )
 
-    fm = FastMail(conf)
+    fm = FastMail(conf_local)
     await fm.send_message(message)
 
 @app.post("/api/bookings", response_model=schemas.Booking)
@@ -331,7 +347,7 @@ async def create_booking(booking: schemas.BookingCreate, background_tasks: Backg
     booking_data_for_email = schemas.Booking.from_orm(db_booking).model_dump()
 
     # Aggiunge l'invio dell'email come task in background
-    background_tasks.add_task(send_email_confirmation, booking.email, booking_data_for_email, db)
+    background_tasks.add_task(send_email_confirmation, booking.email, booking_data_for_email)
 
     return db_booking
 
