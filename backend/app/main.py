@@ -514,3 +514,8 @@ async def export_bookings_to_pdf(
 
     buffer.seek(0)
     return StreamingResponse(buffer, media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename={file_name_base}.pdf"})
+
+# Aggiungi questa parte alla fine del file per l'esecuzione locale
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
