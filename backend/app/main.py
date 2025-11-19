@@ -45,12 +45,9 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD") # Get admin password from .env
 # Lista degli URL autorizzati a fare richieste al nostro backend.
 # È fondamentale per la sicurezza e per risolvere gli errori CORS.
 origins = [
-    "http://127.0.0.1:5502",  # L'indirizzo del tuo Live Server per i test locali
-    "http://localhost:5502",   # Aggiunto per maggiore compatibilità
-    # Lista completa per GitHub Pages per massima compatibilità
-    "https://felagenova.github.io",
-    "https://felagenova.github.io/",
-    "http://www.felagenova.github.io", # Aggiunto anche http per sicurezza
+    # MODIFICA DI DEBUG: Apriamo temporaneamente a tutte le origini per diagnosticare il problema.
+    # Questo è l'ultimo test per confermare che il problema è solo la lista di URL.
+    "*"
 ]
 
 # Aggiungiamo il middleware CORS all'applicazione FastAPI.
