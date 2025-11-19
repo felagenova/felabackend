@@ -45,9 +45,11 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD") # Get admin password from .env
 # Lista degli URL autorizzati a fare richieste al nostro backend.
 # È fondamentale per la sicurezza e per risolvere gli errori CORS.
 origins = [
-    # MODIFICA DI DEBUG: Apriamo temporaneamente a tutte le origini per diagnosticare il problema.
-    # Questo è l'ultimo test per confermare che il problema è solo la lista di URL.
-    "*"
+    "http://127.0.0.1:5502",  # L'indirizzo del tuo Live Server per i test locali
+    "http://localhost:5502",   # Aggiunto per maggiore compatibilità
+    # Lista completa per GitHub Pages per massima compatibilità
+    "https://felagenova.github.io",
+    "https://felagenova.github.io/",
 ]
 
 # Aggiungiamo il middleware CORS all'applicazione FastAPI.
@@ -170,16 +172,20 @@ async def send_email_confirmation(email: str, booking_details: dict):
     Prepara e invia l'email di conferma.
     Questa funzione ora è completamente autonoma per evitare problemi di stato su Render.
     """
+    mail_port = int(os.getenv("MAIL_PORT", 587))
+    # La porta 465 usa SSL, la 587 usa STARTTLS. Adattiamo la configurazione.
+    use_ssl = mail_port == 465
+
     # Ricrea la configurazione della mail e la connessione al DB all'interno del task
     # per garantire che sia thread-safe e non causi crash.
     conf_local = ConnectionConfig(
         MAIL_USERNAME=os.getenv("MAIL_USERNAME"),
         MAIL_PASSWORD=os.getenv("MAIL_PASSWORD"),
         MAIL_FROM=os.getenv("MAIL_FROM"),
-        MAIL_PORT=int(os.getenv("MAIL_PORT", 587)),
+        MAIL_PORT=mail_port,
         MAIL_SERVER=os.getenv("MAIL_SERVER"),
-        MAIL_STARTTLS=True,
-        MAIL_SSL_TLS=False,
+        MAIL_STARTTLS=not use_ssl, # True se non usiamo SSL (es. porta 587)
+        MAIL_SSL_TLS=use_ssl,      # True se usiamo SSL (es. porta 465)
         USE_CREDENTIALS=True,
         VALIDATE_CERTS=True
     )
