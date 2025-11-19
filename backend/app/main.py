@@ -23,10 +23,20 @@ MAX_EXPORT_RECORDS = 1000
 from . import models, schemas
 from .database import engine, get_db
 
-# Crea le tabelle nel database (se non esistono) all'avvio dell'applicazione
-models.Base.metadata.create_all(bind=engine)
-
 app = FastAPI()
+
+@app.on_event("startup")
+async def startup_event():
+    print("FastAPI application starting up...")
+    try:
+        # Crea le tabelle nel database (se non esistono) all'avvio dell'applicazione
+        models.Base.metadata.create_all(bind=engine)
+        print("Database tables checked/created successfully.")
+    except Exception as e:
+        print(f"ERROR during database startup: {e}")
+        # Rilancia l'eccezione per impedire l'avvio dell'app con un DB non funzionante
+        raise
+
 
 # New: Security for admin page
 security = HTTPBasic()
