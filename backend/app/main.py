@@ -47,8 +47,10 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD") # Get admin password from .env
 origins = [
     "http://127.0.0.1:5502",  # L'indirizzo del tuo Live Server per i test locali
     "http://localhost:5502",   # Aggiunto per maggiore compatibilità
-    "https://felagenova.github.io",      # L'URL del tuo sito quando sarà online
-    "https://felagenova.github.io/",     # Aggiunto con lo slash finale per sicurezza
+    # Lista completa per GitHub Pages per massima compatibilità
+    "https://felagenova.github.io",
+    "https://felagenova.github.io/",
+    "http://felagenova.github.io", # Aggiunto anche http per sicurezza
 ]
 
 # Aggiungiamo il middleware CORS all'applicazione FastAPI.
