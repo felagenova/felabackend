@@ -50,7 +50,7 @@ origins = [
     # Lista completa per GitHub Pages per massima compatibilità
     "https://felagenova.github.io",
     "https://felagenova.github.io/",
-    "http://felagenova.github.io", # Aggiunto anche http per sicurezza
+    "http://www.felagenova.github.io", # Aggiunto anche http per sicurezza
 ]
 
 # Aggiungiamo il middleware CORS all'applicazione FastAPI.
