@@ -5,3 +5,4 @@ python-dotenv
 reportlab
 psycopg2-binary
 sib-api-v3-sdk
+email-validator
