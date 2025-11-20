@@ -172,109 +172,117 @@ async def send_email_confirmation(email: str, booking_details: dict):
     Prepara e invia l'email di conferma.
     Questa funzione ora è completamente autonoma per evitare problemi di stato su Render.
     """
-    db = next(get_db())
-
-    # Formattiamo la data e l'ora per una migliore leggibilità
-    booking_date_formatted = booking_details['booking_date'].strftime('%d/%m/%Y')
-    booking_time_formatted = booking_details['booking_time'].strftime('%H:%M') if booking_details['booking_time'] else "N/D"
-
-    # Determina il nome dell'evento da mostrare nella mail
-    event_name = ""
-    if booking_details.get("event_id"):
-        special_event = db.query(models.SpecialEvent).filter(models.SpecialEvent.id == booking_details["event_id"]).first()
-        if special_event:
-            event_name = special_event.display_name
-    else:
-        # Se non è un evento speciale, è un brunch
-        event_name = f"Brunch del {booking_date_formatted}"
-
-    # HTML per la riga dell'evento, da inserire solo se l'evento ha un nome
-    event_row_html = ""
-    if event_name:
-        event_row_html = f"""
-        <tr style="border-bottom: 1px solid #eee;">
-            <td style="padding: 10px 0; font-size: 16px;"><strong>Evento:</strong></td>
-            <td style="padding: 10px 0; font-size: 16px; text-align: right;">{event_name}</td>
-        </tr>
-        """
-    
-    # Costruiamo il link di cancellazione
-    # Il token viene convertito in stringa per essere usato nell'URL
-    frontend_url = os.getenv("FRONTEND_URL", "http://127.0.0.1:5502") # Usa la variabile o un default
-    cancellation_token_str = str(booking_details['cancellation_token'])
-    cancellation_link = f"{frontend_url}/cancellazione.html?token={cancellation_token_str}"
-
-    html_body = f"""
-    <!DOCTYPE html>
-    <html lang="it">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Conferma Prenotazione - Fela! Music Bar</title>
-    </head>
-    <body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #f3f0ce; color: #333;">
-        <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; margin: 20px auto; border-collapse: collapse; background-color: #ffffff; border: 1px solid #ddd;">
-            <tr>
-                <td align="center" style="padding: 20px 0; background-color: #ff0403;">
-                    <h1 style="color: #f3f0ce; margin: 0; font-family: 'Red Hat Display', sans-serif;">Fela! Music Bar</h1>
-                </td>
-            </tr>
-            <tr>
-                <td style="padding: 40px 30px;">
-                    <h2 style="color: #333333; font-family: 'Red Hat Display', sans-serif; margin-top: 0;">Ciao {booking_details['name']},</h2>
-                    <p style="font-size: 16px; line-height: 1.5;">La tua prenotazione da Fela! è confermata. Ecco i dettagli:</p>
-                    
-                    <table border="0" cellpadding="5" cellspacing="0" width="100%" style="margin-top: 20px; border-collapse: collapse;">
-                        {event_row_html}
-                        <tr style="border-bottom: 1px solid #eee;">
-                            <td style="padding: 10px 0; font-size: 16px;"><strong>Data:</strong></td>
-                            <td style="padding: 10px 0; font-size: 16px; text-align: right;">{booking_date_formatted}</td>
-                        </tr>
-                        <tr style="border-bottom: 1px solid #eee;">
-                            <td style="padding: 10px 0; font-size: 16px;"><strong>Ora:</strong></td>
-                            <td style="padding: 10px 0; font-size: 16px; text-align: right;">{booking_time_formatted}</td>
-                        </tr>
-                        <tr>
-                            <td style="padding: 10px 0; font-size: 16px;"><strong>Persone:</strong></td>
-                            <td style="padding: 10px 0; font-size: 16px; text-align: right;">{booking_details['guests']}</td>
-                        </tr>
-                    </table>
-
-                    <p style="font-size: 16px; line-height: 1.5; margin-top: 30px;">Grazie per aver scelto Fela! Non vediamo l'ora di accoglierti.</p>
-                    <p style="font-size: 14px; color: #888; margin-top: 25px;">Se hai bisogno di cancellare la tua prenotazione, puoi farlo cliccando sul seguente link: <a href="{cancellation_link}" style="color: #5b5bffff;">Cancella prenotazione</a>.</p>
-                </td>
-            </tr>
-            <tr>
-                <td align="center" style="padding: 20px; background-color: #f4f4f4; font-size: 12px; color: #777;">
-                    <p style="margin: 0;">Fela! Music Bar | Via di S. Cosimo, 6r, 16128 Genova GE</p>
-                    <p style="margin: 5px 0 0 0;">Questa è un'email generata automaticamente, per favore non rispondere.</p>
-                </td>
-            </tr>
-        </table>
-    </body>
-    </html>
-    """
-    # --- Logica di invio con Brevo (Sendinblue) ---
-    configuration = sib_api_v3_sdk.Configuration()
-    configuration.api_key['api-key'] = os.getenv('BREVO_API_KEY')
-
-    api_instance = sib_api_v3_sdk.TransactionalEmailsApi(sib_api_v3_sdk.ApiClient(configuration))
-    
-    sender_email = os.getenv("MAIL_FROM")
-    sender_name = "Fela! Music Bar"
-    
-    send_smtp_email = sib_api_v3_sdk.SendSmtpEmail(
-        to=[{"email": email, "name": booking_details['name']}],
-        sender={"email": sender_email, "name": sender_name},
-        subject="Conferma Prenotazione - Fela! Music Bar",
-        html_content=html_body
-    )
-
+    # Gestione manuale della sessione del database per i task in background.
+    # Questo è FONDAMENTALE per evitare che la connessione rimanga aperta e causi il crash del server.
+    db_gen = get_db()
+    db = next(db_gen)
     try:
+        # --- TUTTA LA LOGICA DELLA FUNZIONE VA QUI DENTRO ---
+        # Formattiamo la data e l'ora per una migliore leggibilità
+        booking_date_formatted = booking_details['booking_date'].strftime('%d/%m/%Y')
+        booking_time_formatted = booking_details['booking_time'].strftime('%H:%M') if booking_details['booking_time'] else "N/D"
+
+        # Determina il nome dell'evento da mostrare nella mail
+        event_name = ""
+        if booking_details.get("event_id"):
+            special_event = db.query(models.SpecialEvent).filter(models.SpecialEvent.id == booking_details["event_id"]).first()
+            if special_event:
+                event_name = special_event.display_name
+        else:
+            # Se non è un evento speciale, è un brunch
+            event_name = f"Brunch del {booking_date_formatted}"
+
+        # HTML per la riga dell'evento, da inserire solo se l'evento ha un nome
+        event_row_html = ""
+        if event_name:
+            event_row_html = f"""
+            <tr style="border-bottom: 1px solid #eee;">
+                <td style="padding: 10px 0; font-size: 16px;"><strong>Evento:</strong></td>
+                <td style="padding: 10px 0; font-size: 16px; text-align: right;">{event_name}</td>
+            </tr>
+            """
+
+        # Costruiamo il link di cancellazione
+        frontend_url = os.getenv("FRONTEND_URL", "http://127.0.0.1:5502")
+        cancellation_token_str = str(booking_details['cancellation_token'])
+        cancellation_link = f"{frontend_url}/cancellazione.html?token={cancellation_token_str}"
+
+        html_body = f"""
+        <!DOCTYPE html>
+        <html lang="it">
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Conferma Prenotazione - Fela! Music Bar</title>
+        </head>
+        <body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #f3f0ce; color: #333;">
+            <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; margin: 20px auto; border-collapse: collapse; background-color: #ffffff; border: 1px solid #ddd;">
+                <tr>
+                    <td align="center" style="padding: 20px 0; background-color: #ff0403;">
+                        <h1 style="color: #f3f0ce; margin: 0; font-family: 'Red Hat Display', sans-serif;">Fela! Music Bar</h1>
+                    </td>
+                </tr>
+                <tr>
+                    <td style="padding: 40px 30px;">
+                        <h2 style="color: #333333; font-family: 'Red Hat Display', sans-serif; margin-top: 0;">Ciao {booking_details['name']},</h2>
+                        <p style="font-size: 16px; line-height: 1.5;">La tua prenotazione da Fela! è confermata. Ecco i dettagli:</p>
+                        
+                        <table border="0" cellpadding="5" cellspacing="0" width="100%" style="margin-top: 20px; border-collapse: collapse;">
+                            {event_row_html}
+                            <tr style="border-bottom: 1px solid #eee;">
+                                <td style="padding: 10px 0; font-size: 16px;"><strong>Data:</strong></td>
+                                <td style="padding: 10px 0; font-size: 16px; text-align: right;">{booking_date_formatted}</td>
+                            </tr>
+                            <tr style="border-bottom: 1px solid #eee;">
+                                <td style="padding: 10px 0; font-size: 16px;"><strong>Ora:</strong></td>
+                                <td style="padding: 10px 0; font-size: 16px; text-align: right;">{booking_time_formatted}</td>
+                            </tr>
+                            <tr>
+                                <td style="padding: 10px 0; font-size: 16px;"><strong>Persone:</strong></td>
+                                <td style="padding: 10px 0; font-size: 16px; text-align: right;">{booking_details['guests']}</td>
+                            </tr>
+                        </table>
+
+                        <p style="font-size: 16px; line-height: 1.5; margin-top: 30px;">Grazie per aver scelto Fela! Non vediamo l'ora di accoglierti.</p>
+                        <p style="font-size: 14px; color: #888; margin-top: 25px;">Se hai bisogno di cancellare la tua prenotazione, puoi farlo cliccando sul seguente link: <a href="{cancellation_link}" style="color: #5b5bffff;">Cancella prenotazione</a>.</p>
+                    </td>
+                </tr>
+                <tr>
+                    <td align="center" style="padding: 20px; background-color: #f4f4f4; font-size: 12px; color: #777;">
+                        <p style="margin: 0;">Fela! Music Bar | Via di S. Cosimo, 6r, 16128 Genova GE</p>
+                        <p style="margin: 5px 0 0 0;">Questa è un'email generata automaticamente, per favore non rispondere.</p>
+                    </td>
+                </tr>
+            </table>
+        </body>
+        </html>
+        """
+
+        # --- Logica di invio con Brevo (Sendinblue) ---
+        configuration = sib_api_v3_sdk.Configuration()
+        configuration.api_key['api-key'] = os.getenv('BREVO_API_KEY')
+
+        api_instance = sib_api_v3_sdk.TransactionalEmailsApi(sib_api_v3_sdk.ApiClient(configuration))
+        
+        sender_email = os.getenv("MAIL_FROM")
+        sender_name = "Fela! Music Bar"
+        
+        send_smtp_email = sib_api_v3_sdk.SendSmtpEmail(
+            to=[{"email": email, "name": booking_details['name']}],
+            sender={"email": sender_email, "name": sender_name},
+            subject="Conferma Prenotazione - Fela! Music Bar",
+            html_content=html_body
+        )
+
         api_response = api_instance.send_transac_email(send_smtp_email)
         print(f"Email sent to {email} via Brevo. Message ID: {api_response.message_id}")
-    except sib_api_v3_sdk.ApiException as e:
-        print(f"Error sending email to {email} via Brevo: {e}")
+
+    except Exception as e:
+        print(f"An error occurred in send_email_confirmation: {e}")
+    finally:
+        # Chiude la sessione del database, indipendentemente da errori o successo.
+        print("Closing database session for background task.")
+        db.close()
 
 @app.post("/api/bookings", response_model=schemas.Booking)
 async def create_booking(booking: schemas.BookingCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
