@@ -5,8 +5,8 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func
-from fastapi_mail import ConnectionConfig, FastMail, MessageSchema, MessageType
 from dotenv import load_dotenv
+import sib_api_v3_sdk
 from datetime import time, date, timedelta
 from io import BytesIO
 from reportlab.pdfgen import canvas
@@ -172,23 +172,6 @@ async def send_email_confirmation(email: str, booking_details: dict):
     Prepara e invia l'email di conferma.
     Questa funzione ora è completamente autonoma per evitare problemi di stato su Render.
     """
-    mail_port = int(os.getenv("MAIL_PORT", 587))
-    # La porta 465 usa SSL, la 587 usa STARTTLS. Adattiamo la configurazione.
-    use_ssl = mail_port == 465
-
-    # Ricrea la configurazione della mail e la connessione al DB all'interno del task
-    # per garantire che sia thread-safe e non causi crash.
-    conf_local = ConnectionConfig(
-        MAIL_USERNAME=os.getenv("MAIL_USERNAME"),
-        MAIL_PASSWORD=os.getenv("MAIL_PASSWORD"),
-        MAIL_FROM=os.getenv("MAIL_FROM"),
-        MAIL_PORT=mail_port,
-        MAIL_SERVER=os.getenv("MAIL_SERVER"),
-        MAIL_STARTTLS=not use_ssl, # True se non usiamo SSL (es. porta 587)
-        MAIL_SSL_TLS=use_ssl,      # True se usiamo SSL (es. porta 465)
-        USE_CREDENTIALS=True,
-        VALIDATE_CERTS=True
-    )
     db = next(get_db())
 
     # Formattiamo la data e l'ora per una migliore leggibilità
@@ -271,16 +254,27 @@ async def send_email_confirmation(email: str, booking_details: dict):
     </body>
     </html>
     """
+    # --- Logica di invio con Brevo (Sendinblue) ---
+    configuration = sib_api_v3_sdk.Configuration()
+    configuration.api_key['api-key'] = os.getenv('BREVO_API_KEY')
 
-    message = MessageSchema(
+    api_instance = sib_api_v3_sdk.TransactionalEmailsApi(sib_api_v3_sdk.ApiClient(configuration))
+    
+    sender_email = os.getenv("MAIL_FROM")
+    sender_name = "Fela! Music Bar"
+    
+    send_smtp_email = sib_api_v3_sdk.SendSmtpEmail(
+        to=[{"email": email, "name": booking_details['name']}],
+        sender={"email": sender_email, "name": sender_name},
         subject="Conferma Prenotazione - Fela! Music Bar",
-        recipients=[email],
-        body=html_body,
-        subtype=MessageType.html
+        html_content=html_body
     )
 
-    fm = FastMail(conf_local)
-    await fm.send_message(message)
+    try:
+        api_response = api_instance.send_transac_email(send_smtp_email)
+        print(f"Email sent to {email} via Brevo. Message ID: {api_response.message_id}")
+    except sib_api_v3_sdk.ApiException as e:
+        print(f"Error sending email to {email} via Brevo: {e}")
 
 @app.post("/api/bookings", response_model=schemas.Booking)
 async def create_booking(booking: schemas.BookingCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):

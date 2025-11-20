@@ -2,6 +2,6 @@ fastapi
 uvicorn
 SQLAlchemy
 python-dotenv
-fastapi-mail
 reportlab
 psycopg2-binary
+sib-api-v3-sdk
