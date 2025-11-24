@@ -1,7 +1,7 @@
 from pydantic import BaseModel, EmailStr
 from datetime import date, time
 import uuid
-from typing import Optional
+from typing import Optional, List
 
 # Schema per la creazione di una prenotazione (dati in input dall'API)
 class BookingCreate(BaseModel):
@@ -28,6 +28,7 @@ class SpecialEventBase(BaseModel):
     display_name: str
     booking_date: date
     booking_time: Optional[time] = None
+    is_closed: bool = False # NUOVO
 
 class SpecialEventCreate(SpecialEventBase):
     pass

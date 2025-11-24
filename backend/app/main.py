@@ -72,36 +72,30 @@ def get_bookable_events(db: Session = Depends(get_db)):
     events = []
     today = date.today()
 
-    # --- Eventi Speciali (da aggiornare manualmente o spostare su DB in futuro) ---
+    # --- Eventi Speciali (recuperati dal DB) ---
     # Ora gli eventi speciali vengono recuperati dal database
-    db_special_events = db.query(models.SpecialEvent).with_session(db).all()
+    db_special_events = db.query(models.SpecialEvent).filter(models.SpecialEvent.is_closed == False).with_session(db).all()
     for event in db_special_events:
         if event.booking_date >= today:
-            events.append({
-                "type": "special",
-                "id": event.id, # ID dell'evento speciale dal DB
-                "display_name": f"{event.display_name} - {event.booking_date.strftime('%d/%m')}",
-                "booking_date": event.booking_date.isoformat(),
-                "booking_time": event.booking_time.isoformat() if event.booking_time else None,
-            })
+            # Se il nome dell'evento contiene "brunch", lo trattiamo in modo speciale
+            if "brunch" in event.display_name.lower():
+                events.append({
+                    "type": "brunch",
+                    "id": event.id,
+                    "display_name": f"{event.display_name} - {event.booking_date.strftime('%d/%m')}",
+                    "booking_date": event.booking_date.isoformat(),
+                    "available_slots": [time(12, 0), time(13, 30)], # Modificato: invia oggetti time, non stringhe
+                    "booking_time": None # Per il brunch, l'orario viene scelto dai turni
+                })
+            else: # Altrimenti, è un normale evento speciale
+                events.append({
+                    "type": "special",
+                    "id": event.id,
+                    "display_name": f"{event.display_name} - {event.booking_date.strftime('%d/%m')}",
+                    "booking_date": event.booking_date.isoformat(),
+                    "booking_time": event.booking_time.isoformat() if event.booking_time else None,
+                })
 
-
-    # --- Brunch Domenicali (genera per le prossime 8 domeniche) ---
-    # Troviamo le prossime 8 domeniche
-    sundays_found = 0
-    day_offset = 0
-    while sundays_found < 8:
-        check_date = today + timedelta(days=day_offset)
-        if check_date.weekday() == 6: # 6 = Domenica
-            events.append({
-                "type": "brunch",
-                "display_name": f"Brunch - {check_date.strftime('%d/%m')}",
-                "booking_date": check_date.isoformat(),
-                "available_slots": [time(12, 0).isoformat(), time(13, 30).isoformat()],
-                "id": None # I brunch generati non hanno un ID di evento speciale
-            })
-            sundays_found += 1
-        day_offset += 1
 
     # Ordina gli eventi per data
     def sort_key(event):
@@ -143,8 +137,55 @@ async def read_special_events(
     if credentials.username != "admin" or credentials.password != ADMIN_PASSWORD:
         raise HTTPException(status_code=401, detail="Credenziali non valide", headers={"WWW-Authenticate": "Basic"})
     
-    events = db.query(models.SpecialEvent).order_by(models.SpecialEvent.booking_date, models.SpecialEvent.booking_time).all()
+    # Modificato per restituire tutti gli eventi, inclusi quelli chiusi,
+    # così l'admin può vederli e gestirli tutti.
+    events = db.query(models.SpecialEvent).order_by(
+        models.SpecialEvent.booking_date.desc(), models.SpecialEvent.booking_time.desc()
+    ).all()
     return events
+
+@app.patch("/api/admin/special-events/{event_id}/toggle-status", response_model=schemas.SpecialEvent)
+async def toggle_event_status(
+    event_id: int,
+    credentials: HTTPBasicCredentials = Depends(security),
+    db: Session = Depends(get_db)
+):
+    """
+    Cambia lo stato di un evento (aperto/chiuso alle prenotazioni).
+    """
+    if credentials.username != "admin" or credentials.password != ADMIN_PASSWORD:
+        raise HTTPException(status_code=401, detail="Credenziali non valide", headers={"WWW-Authenticate": "Basic"})
+
+    event = db.query(models.SpecialEvent).filter(models.SpecialEvent.id == event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Evento non trovato")
+
+    event.is_closed = not event.is_closed # Inverte lo stato attuale
+    db.commit()
+    db.refresh(event)
+    return event
+
+@app.patch("/api/admin/special-events/{event_id}/toggle-status", response_model=schemas.SpecialEvent)
+async def toggle_event_status(
+    event_id: int,
+    credentials: HTTPBasicCredentials = Depends(security),
+    db: Session = Depends(get_db)
+):
+    """
+    Cambia lo stato di un evento (aperto/chiuso alle prenotazioni).
+    """
+    if credentials.username != "admin" or credentials.password != ADMIN_PASSWORD:
+        raise HTTPException(status_code=401, detail="Credenziali non valide", headers={"WWW-Authenticate": "Basic"})
+
+    event = db.query(models.SpecialEvent).filter(models.SpecialEvent.id == event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Evento non trovato")
+
+    event.is_closed = not event.is_closed # Inverte lo stato attuale
+    db.commit()
+    db.refresh(event)
+    return event
+
 
 @app.delete("/api/admin/special-events/{event_id}", response_model=schemas.SpecialEvent)
 async def delete_special_event(
@@ -290,6 +331,14 @@ async def create_booking(booking: schemas.BookingCreate, background_tasks: Backg
     Endpoint per creare una nuova prenotazione.
     Riceve i dati della prenotazione, li salva nel database e li restituisce.
     """
+    # --- CONTROLLO SICUREZZA: L'EVENTO È APERTO? ---
+    if booking.event_id:
+        event = db.query(models.SpecialEvent).filter(models.SpecialEvent.id == booking.event_id).first()
+        if not event:
+            raise HTTPException(status_code=404, detail="L'evento specificato non esiste.")
+        if event.is_closed:
+            raise HTTPException(status_code=400, detail="Spiacenti, le prenotazioni per questo evento sono chiuse.")
+
     # --- CONTROLLO DUPLICATI MIGLIORATO ---
     # Controlla se esiste già una prenotazione con la stessa email PER LO STESSO EVENTO.
     query = db.query(models.Booking).filter(models.Booking.email == booking.email)

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Date, Time, ForeignKey
+from sqlalchemy import Column, Integer, String, Date, Time, ForeignKey, Boolean
 from .database import Base
 import uuid
 from sqlalchemy.orm import relationship
@@ -25,5 +25,6 @@ class SpecialEvent(Base):
     display_name = Column(String, index=True)
     booking_date = Column(Date)
     booking_time = Column(Time, nullable=True) # L'ora può essere opzionale per alcuni eventi
+    is_closed = Column(Boolean, default=False, nullable=False) # NUOVO: per chiudere le prenotazioni
 
     bookings = relationship("Booking", back_populates="event") # Relazione inversa con Booking
