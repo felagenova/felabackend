@@ -176,31 +176,35 @@ def send_booking_confirmation_email(
     html_content = f"""
     <html>
     <head>
-         <meta charset="UTF-8">
+        <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
-            body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-            .container {{ max-width: 600px; margin: 20px auto; padding: 20px; border-radius: 8px;  }}
-            h2 {{ color: #D9534F; font-family: 'Red Hat Display', sans-serif; font-weight: 700; }}
-            p {{ margin-bottom: 10px; }}
-            .summary-item {{ margin-bottom: 5px; }}
-             .button {{ display: inline-block; background-color: #D9534F; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; margin-top: 20px; }}
-            .footer {{ margin-top: 30px; font-size: 0.9em; color: #777; text-align: center; }}
-
-            /* Stili specifici Fela! */
             body {{
-                background-color: #f3f0ce; /* Sostituisci con il colore di sfondo del tuo sito */
-                color: #333;
+                background-color: #f3f0ce;
+                color: #1a1a1a;
                 font-family: 'Red Hat Display', sans-serif;
+                line-height: 1.6;
+                margin: 0;
+                padding: 0;
             }}
             .container {{
+                max-width: 600px;
+                margin: 20px auto;
+                padding: 20px;
+                border-radius: 8px;
                 background-color: #f3f0ce;
-                border: 1px solid #f3f0ce; /* Colore
+            }}
+            h2 {{
+                color: #ff0403;
+                font-weight: 700;
+            }}
+            .button {{ display: inline-block; background-color: #D9534F; color: white !important; padding: 10px 20px; text-decoration: none; border-radius: 5px; margin-top: 20px; }}
+            .footer {{ margin-top: 30px; font-size: 0.9em; color: #777; text-align: center; }}
         </style>
     </head>
     <body>
         <div class="container">
-            <h2>Grazie per la tua prenotazione da Fela! Music Bar!</h2>
+            <h2>Grazie per la tua prenotazione da Fela!</h2>
             <p>Ciao {booking_summary['name']},</p>
             <p>La tua prenotazione è stata confermata con successo. Ecco un riepilogo dei dettagli:</p>
             <div class="summary-item"><strong>Evento:</strong> {booking_summary['event_name']}</div>
