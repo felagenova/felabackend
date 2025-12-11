@@ -87,11 +87,12 @@ def get_current_admin(credentials: HTTPBasicCredentials = Depends(security)):
 # Lista degli URL autorizzati a fare richieste al nostro backend.
 # È fondamentale per la sicurezza e per risolvere gli errori CORS.
 origins = [
+    "https://felagenova.github.io", # Il tuo sito di produzione
     "http://127.0.0.1:5502",  # L'indirizzo del tuo Live Server per i test locali
     "http://localhost:5502",   # Aggiunto per maggiore compatibilità
-    # Lista completa per GitHub Pages per massima compatibilità
-    "https://felagenova.github.io",
-    "https://felagenova.github.io/",
+    # Durante lo sviluppo, può essere utile consentire tutte le origini.
+    # Rimuovi o commenta questa riga in produzione se vuoi una sicurezza più stretta.
+    "*"
 ]
 
 # Aggiungiamo il middleware CORS all'applicazione FastAPI.
