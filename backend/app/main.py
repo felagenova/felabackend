@@ -35,6 +35,8 @@ if not SENDINBLUE_API_KEY:
     sendinblue_api_client = None
     transactional_emails_api = None
 else:
+    # Aggiungi un log per verificare che la chiave sia stata caricata correttamente
+    print(f"Sendinblue API Key loaded successfully (ends with: ...{SENDINBLUE_API_KEY[-4:]}).")
     configuration = sib_api_v3_sdk.Configuration()
     configuration.api_key['api-key'] = SENDINBLUE_API_KEY
     sendinblue_api_client = sib_api_v3_sdk.ApiClient(configuration)
