@@ -1,8 +1,7 @@
 from fastapi import FastAPI, Depends, HTTPException, BackgroundTasks, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, RedirectResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from dotenv import load_dotenv
@@ -177,19 +176,31 @@ def send_booking_confirmation_email(
     html_content = f"""
     <html>
     <head>
+         <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
             body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-            .container {{ max-width: 600px; margin: 20px auto; padding: 20px; border: 1px solid #ddd; border-radius: 8px; background-color: #f9f9f9; }}
-            h2 {{ color: #d9534f; }}
+            .container {{ max-width: 600px; margin: 20px auto; padding: 20px; border-radius: 8px;  }}
+            h2 {{ color: #D9534F; font-family: 'Red Hat Display', sans-serif; font-weight: 700; }}
             p {{ margin-bottom: 10px; }}
             .summary-item {{ margin-bottom: 5px; }}
-            .button {{ display: inline-block; background-color: #d9534f; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; margin-top: 20px; }}
+             .button {{ display: inline-block; background-color: #D9534F; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; margin-top: 20px; }}
             .footer {{ margin-top: 30px; font-size: 0.9em; color: #777; text-align: center; }}
+
+            /* Stili specifici Fela! */
+            body {{
+                background-color: #f3f0ce; /* Sostituisci con il colore di sfondo del tuo sito */
+                color: #333;
+                font-family: 'Red Hat Display', sans-serif;
+            }}
+            .container {{
+                background-color: #f3f0ce;
+                border: 1px solid #f3f0ce; /* Colore
         </style>
     </head>
     <body>
         <div class="container">
-            <h2>Grazie per la tua prenotazione al Fela! Music Bar!</h2>
+            <h2>Grazie per la tua prenotazione da Fela! Music Bar!</h2>
             <p>Ciao {booking_summary['name']},</p>
             <p>La tua prenotazione è stata confermata con successo. Ecco un riepilogo dei dettagli:</p>
             <div class="summary-item"><strong>Evento:</strong> {booking_summary['event_name']}</div>
@@ -439,8 +450,8 @@ async def create_booking(booking: schemas.BookingCreate, background_tasks: Backg
     return {"message": "Prenotazione effettuata. Riceverai una email di conferma."}
 
 # New: Endpoint to handle booking cancellation
-@app.get("/api/bookings/cancel/{token}", status_code=status.HTTP_200_OK)
-def cancel_booking(token: str, db: Session = Depends(get_db)):
+@app.get("/api/bookings/cancel/{token}", status_code=status.HTTP_303_SEE_OTHER)
+def cancel_booking(token: str, db: Session = Depends(get_db)) -> RedirectResponse:
     """
     Endpoint per cancellare una prenotazione tramite un token univoco.
     """
@@ -454,7 +465,10 @@ def cancel_booking(token: str, db: Session = Depends(get_db)):
     
     db.delete(booking_to_cancel)
     db.commit()
-    return {"message": "La tua prenotazione è stata cancellata con successo."}
+    
+    # Reindirizza l'utente a una pagina di conferma sul frontend
+    cancellation_confirmation_url = "https://felagenova.github.io/Fela-/cancellazione.html"
+    return RedirectResponse(url=cancellation_confirmation_url)
 
 @app.get("/")
 def read_root():
