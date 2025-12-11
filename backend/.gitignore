@@ -1,3 +1,4 @@
+credentials.json
 # Ignora l'ambiente virtuale
 venv/
 /venv/

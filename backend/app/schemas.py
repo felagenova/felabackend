@@ -28,6 +28,7 @@ class SpecialEventBase(BaseModel):
     display_name: str
     booking_date: date
     booking_time: Optional[time] = None
+    available_slots: Optional[List[str]] = None # NUOVO: per i turni
     is_closed: bool = False # NUOVO
 
 class SpecialEventCreate(SpecialEventBase):

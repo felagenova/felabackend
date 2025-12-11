@@ -4,5 +4,10 @@ SQLAlchemy
 python-dotenv
 reportlab
 psycopg2-binary
-sib-api-v3-sdk
+brevo-python
 email-validator
+sib_api_v3_sdk
+gspread
+google-auth
+google-api-python-client
+alembic

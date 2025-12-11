@@ -6,13 +6,18 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from dotenv import load_dotenv
-import sib_api_v3_sdk
-from datetime import time, date, timedelta
+import sib_api_v3_sdk # Per le email
+from datetime import time, date, timedelta, datetime # Aggiunto datetime
 from io import BytesIO
 from reportlab.pdfgen import canvas
 from typing import Optional, List
 import os
 from uuid import UUID
+
+# Import per Google Sheets
+import gspread
+from google.oauth2.service_account import Credentials
+from pydantic import EmailStr
 
 # Carica le variabili d'ambiente dal file .env all'inizio di tutto
 load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
@@ -20,7 +25,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 # Definisci la costante mancante
 MAX_EXPORT_RECORDS = 1000
 
-from . import models, schemas
+from . import models, schemas, database
 from .database import engine, get_db
 
 app = FastAPI()
@@ -37,10 +42,47 @@ async def startup_event():
         # Rilancia l'eccezione per impedire l'avvio dell'app con un DB non funzionante
         raise
 
+# --- NUOVO: Configurazione per Google Sheets ---
+try:
+    SCOPE = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive.file"
+    ]
+    CREDENTIALS_FILE = os.path.join(os.path.dirname(__file__), '..', 'credentials.json')
+    creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=SCOPE)
+    client = gspread.authorize(creds)
+    SHEET_ID = "1GnbUbfP666Gpzvbh9fzStaiakMm4qRoSrClfF4LW6Ck"
+    spreadsheet = client.open_by_key(SHEET_ID)
+    mailing_list_sheet = spreadsheet.worksheet("Foglio1") # Assicurati che il nome del foglio sia "Foglio1"
+    print("Google Sheets client initialized successfully.")
+except FileNotFoundError:
+    print("ERRORE: File 'credentials.json' non trovato. La funzionalità di mailing list non sarà attiva.")
+    mailing_list_sheet = None
+except Exception as e:
+    print(f"ERRORE durante l'inizializzazione di Google Sheets: {e}")
+    mailing_list_sheet = None
+
+# --- NUOVO: Modello Pydantic per la richiesta di iscrizione ---
+class MailingListSignup(schemas.BaseModel):
+    email: EmailStr
+
 
 # New: Security for admin page
 security = HTTPBasic()
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD") # Get admin password from .env
+
+# Funzione di dipendenza per la sicurezza dell'admin
+def get_current_admin(credentials: HTTPBasicCredentials = Depends(security)):
+    """
+    Dipendenza per verificare le credenziali dell'amministratore.
+    Centralizza la logica di autenticazione.
+    """
+    correct_username = credentials.username == "admin"
+    # Usa una funzione di confronto sicura per prevenire attacchi di timing
+    correct_password = ADMIN_PASSWORD is not None and credentials.password == ADMIN_PASSWORD
+    if not (correct_username and correct_password):
+        raise HTTPException(status_code=401, detail="Credenziali non valide", headers={"WWW-Authenticate": "Basic"})
+    return credentials
 
 # Lista degli URL autorizzati a fare richieste al nostro backend.
 # È fondamentale per la sicurezza e per risolvere gli errori CORS.
@@ -63,6 +105,39 @@ app.add_middleware(
     expose_headers=["Content-Disposition"], # Permette al JS di leggere l'header per il nome del file
 )
 
+# --- NUOVO: Endpoint per l'iscrizione alla Mailing List ---
+@app.post("/api/mailing-list-signup", status_code=status.HTTP_201_CREATED)
+async def signup_to_mailing_list(signup_data: MailingListSignup):
+    """
+    Aggiunge un'email alla mailing list su Google Sheets.
+    """
+    if not mailing_list_sheet:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Il servizio di mailing list non è al momento disponibile a causa di un errore di configurazione."
+        )
+
+    try:
+        # Controlla se l'email è già presente
+        # Usiamo .get_all_values() per essere sicuri di leggere tutto e gestiamo il caso di foglio vuoto
+        all_records = mailing_list_sheet.get_all_values()
+        existing_emails = [row[0] for row in all_records if row] # Estrae solo la prima colonna (email)
+
+        if signup_data.email in existing_emails:
+            # Restituisce un codice 200 OK con un messaggio specifico per l'utente già iscritto
+            return {"message": "Email già iscritta!"}
+
+        timestamp = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        new_row = [signup_data.email, timestamp]
+        mailing_list_sheet.append_row(new_row)
+        return {"message": "Iscrizione alla mailing list avvenuta con successo!"}
+    except Exception as e:
+        print(f"Errore durante la scrittura su Google Sheets: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Impossibile completare l'iscrizione alla mailing list in questo momento."
+        )
+
 @app.get("/api/bookable-events")
 def get_bookable_events(db: Session = Depends(get_db)):
     """
@@ -77,30 +152,20 @@ def get_bookable_events(db: Session = Depends(get_db)):
     db_special_events = db.query(models.SpecialEvent).filter(models.SpecialEvent.is_closed == False).with_session(db).all()
     for event in db_special_events:
         if event.booking_date >= today:
-            # Se il nome dell'evento contiene "brunch", lo trattiamo in modo speciale
-            if "brunch" in event.display_name.lower():
-                events.append({
-                    "type": "brunch",
-                    "id": event.id,
-                    "display_name": f"{event.display_name} - {event.booking_date.strftime('%d/%m')}",
-                    "booking_date": event.booking_date.isoformat(),
-                    "available_slots": [time(12, 0), time(13, 30)], # Modificato: invia oggetti time, non stringhe
-                    "booking_time": None # Per il brunch, l'orario viene scelto dai turni
-                })
-            else: # Altrimenti, è un normale evento speciale
-                events.append({
-                    "type": "special",
-                    "id": event.id,
-                    "display_name": f"{event.display_name} - {event.booking_date.strftime('%d/%m')}",
-                    "booking_date": event.booking_date.isoformat(),
-                    "booking_time": event.booking_time.isoformat() if event.booking_time else None,
-                })
+            # Logica unificata per tutti gli eventi
+            events.append({
+                "type": "special",
+                "id": event.id,
+                "display_name": f"{event.display_name} - {event.booking_date.strftime('%d/%m')}",
+                "booking_date": event.booking_date.isoformat(),
+                "booking_time": event.booking_time.isoformat() if event.booking_time else None,
+                # Standardizza l'output per i turni, assicurando che sia sempre una lista
+                "available_slots": event.available_slots if event.available_slots else []
+            })
 
 
     # Ordina gli eventi per data
     def sort_key(event):
-        # Per gli eventi speciali, booking_time è una stringa. Per il brunch, usiamo il primo slot disponibile.
-        # Se booking_time è None (per eventi senza orario specifico), usiamo un default per l'ordinamento.
         event_time_str = event.get('booking_time')
         if event_time_str is None and event.get('type') == 'brunch':
             event_time_str = event['available_slots'][0] if event['available_slots'] else '00:00:00'
@@ -115,14 +180,18 @@ def get_bookable_events(db: Session = Depends(get_db)):
 @app.post("/api/admin/special-events", response_model=schemas.SpecialEvent)
 async def create_special_event(
     event: schemas.SpecialEventCreate,
-    credentials: HTTPBasicCredentials = Depends(security),
+    admin: HTTPBasicCredentials = Depends(get_current_admin),
     db: Session = Depends(get_db)
 ):
     """Crea un nuovo evento speciale."""
-    if credentials.username != "admin" or credentials.password != ADMIN_PASSWORD:
-        raise HTTPException(status_code=401, detail="Credenziali non valide", headers={"WWW-Authenticate": "Basic"})
     
-    db_event = models.SpecialEvent(**event.model_dump())
+    # Converte il modello Pydantic in un dizionario
+    event_data = event.model_dump()
+    
+    # Assicura che i turni (available_slots) siano gestiti correttamente come JSON.
+    # SQLAlchemy con il driver giusto (es. psycopg2) gestirà la serializzazione.
+    db_event = models.SpecialEvent(**event_data)
+
     db.add(db_event)
     db.commit()
     db.refresh(db_event)
@@ -130,52 +199,31 @@ async def create_special_event(
 
 @app.get("/api/admin/special-events", response_model=List[schemas.SpecialEvent])
 async def read_special_events(
-    credentials: HTTPBasicCredentials = Depends(security),
+    admin: HTTPBasicCredentials = Depends(get_current_admin),
     db: Session = Depends(get_db)
 ):
     """Restituisce tutti gli eventi speciali."""
-    if credentials.username != "admin" or credentials.password != ADMIN_PASSWORD:
-        raise HTTPException(status_code=401, detail="Credenziali non valide", headers={"WWW-Authenticate": "Basic"})
     
     # Modificato per restituire tutti gli eventi, inclusi quelli chiusi,
     # così l'admin può vederli e gestirli tutti.
     events = db.query(models.SpecialEvent).order_by(
         models.SpecialEvent.booking_date.desc(), models.SpecialEvent.booking_time.desc()
     ).all()
-    return events
+    # È necessario assicurarsi che i dati vengano serializzati correttamente,
+    # inclusi i campi JSON come available_slots.
+    # Forzare la conversione tramite il modello Pydantic garantisce che tutti i campi siano presenti.
+    response_events = [schemas.SpecialEvent.from_orm(event) for event in events]
+    return response_events
 
 @app.patch("/api/admin/special-events/{event_id}/toggle-status", response_model=schemas.SpecialEvent)
 async def toggle_event_status(
     event_id: int,
-    credentials: HTTPBasicCredentials = Depends(security),
+    admin: HTTPBasicCredentials = Depends(get_current_admin),
     db: Session = Depends(get_db)
 ):
     """
     Cambia lo stato di un evento (aperto/chiuso alle prenotazioni).
     """
-    if credentials.username != "admin" or credentials.password != ADMIN_PASSWORD:
-        raise HTTPException(status_code=401, detail="Credenziali non valide", headers={"WWW-Authenticate": "Basic"})
-
-    event = db.query(models.SpecialEvent).filter(models.SpecialEvent.id == event_id).first()
-    if not event:
-        raise HTTPException(status_code=404, detail="Evento non trovato")
-
-    event.is_closed = not event.is_closed # Inverte lo stato attuale
-    db.commit()
-    db.refresh(event)
-    return event
-
-@app.patch("/api/admin/special-events/{event_id}/toggle-status", response_model=schemas.SpecialEvent)
-async def toggle_event_status(
-    event_id: int,
-    credentials: HTTPBasicCredentials = Depends(security),
-    db: Session = Depends(get_db)
-):
-    """
-    Cambia lo stato di un evento (aperto/chiuso alle prenotazioni).
-    """
-    if credentials.username != "admin" or credentials.password != ADMIN_PASSWORD:
-        raise HTTPException(status_code=401, detail="Credenziali non valide", headers={"WWW-Authenticate": "Basic"})
 
     event = db.query(models.SpecialEvent).filter(models.SpecialEvent.id == event_id).first()
     if not event:
@@ -190,12 +238,10 @@ async def toggle_event_status(
 @app.delete("/api/admin/special-events/{event_id}", response_model=schemas.SpecialEvent)
 async def delete_special_event(
     event_id: int,
-    credentials: HTTPBasicCredentials = Depends(security),
+    admin: HTTPBasicCredentials = Depends(get_current_admin),
     db: Session = Depends(get_db)
 ):
     """Cancella un evento speciale e tutte le prenotazioni associate."""
-    if credentials.username != "admin" or credentials.password != ADMIN_PASSWORD:
-        raise HTTPException(status_code=401, detail="Credenziali non valide", headers={"WWW-Authenticate": "Basic"})
     
     event = db.query(models.SpecialEvent).filter(models.SpecialEvent.id == event_id).first()
     if not event:
@@ -208,128 +254,11 @@ async def delete_special_event(
     db.commit()
     return event
 
-async def send_email_confirmation(email: str, booking_details: dict):
-    """
-    Prepara e invia l'email di conferma.
-    Questa funzione ora è completamente autonoma per evitare problemi di stato su Render.
-    """
-    # Gestione manuale della sessione del database per i task in background.
-    # Questo è FONDAMENTALE per evitare che la connessione rimanga aperta e causi il crash del server.
-    db_gen = get_db()
-    db = next(db_gen)
-    try:
-        # --- TUTTA LA LOGICA DELLA FUNZIONE VA QUI DENTRO ---
-        # Formattiamo la data e l'ora per una migliore leggibilità
-        booking_date_formatted = booking_details['booking_date'].strftime('%d/%m/%Y')
-        booking_time_formatted = booking_details['booking_time'].strftime('%H:%M') if booking_details['booking_time'] else "N/D"
-
-        # Determina il nome dell'evento da mostrare nella mail
-        event_name = ""
-        if booking_details.get("event_id"):
-            special_event = db.query(models.SpecialEvent).filter(models.SpecialEvent.id == booking_details["event_id"]).first()
-            if special_event:
-                event_name = special_event.display_name
-        else:
-            # Se non è un evento speciale, è un brunch
-            event_name = f"Brunch del {booking_date_formatted}"
-
-        # HTML per la riga dell'evento, da inserire solo se l'evento ha un nome
-        event_row_html = ""
-        if event_name:
-            event_row_html = f"""
-            <tr style="border-bottom: 1px solid #eee;">
-                <td style="padding: 10px 0; font-size: 16px;"><strong>Evento:</strong></td>
-                <td style="padding: 10px 0; font-size: 16px; text-align: right;">{event_name}</td>
-            </tr>
-            """
-
-        # Costruiamo il link di cancellazione
-        frontend_url = os.getenv("FRONTEND_URL", "http://127.0.0.1:5502")
-        cancellation_token_str = str(booking_details['cancellation_token'])
-        cancellation_link = f"{frontend_url}/cancellazione.html?token={cancellation_token_str}"
-
-        html_body = f"""
-        <!DOCTYPE html>
-        <html lang="it">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Conferma Prenotazione - Fela! Music Bar</title>
-        </head>
-        <body style="margin: 0; padding: 0; font-family: Arial, sans-serif; background-color: #f3f0ce; color: #333;">
-            <table align="center" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width: 600px; margin: 20px auto; border-collapse: collapse; background-color: #ffffff; border: 1px solid #ddd;">
-                <tr>
-                    <td align="center" style="padding: 20px 0; background-color: #ff0403;">
-                        <h1 style="color: #f3f0ce; margin: 0; font-family: 'Red Hat Display', sans-serif;">Fela! Music Bar</h1>
-                    </td>
-                </tr>
-                <tr>
-                    <td style="padding: 40px 30px;">
-                        <h2 style="color: #333333; font-family: 'Red Hat Display', sans-serif; margin-top: 0;">Ciao {booking_details['name']},</h2>
-                        <p style="font-size: 16px; line-height: 1.5;">La tua prenotazione da Fela! è confermata. Ecco i dettagli:</p>
-                        
-                        <table border="0" cellpadding="5" cellspacing="0" width="100%" style="margin-top: 20px; border-collapse: collapse;">
-                            {event_row_html}
-                            <tr style="border-bottom: 1px solid #eee;">
-                                <td style="padding: 10px 0; font-size: 16px;"><strong>Data:</strong></td>
-                                <td style="padding: 10px 0; font-size: 16px; text-align: right;">{booking_date_formatted}</td>
-                            </tr>
-                            <tr style="border-bottom: 1px solid #eee;">
-                                <td style="padding: 10px 0; font-size: 16px;"><strong>Ora:</strong></td>
-                                <td style="padding: 10px 0; font-size: 16px; text-align: right;">{booking_time_formatted}</td>
-                            </tr>
-                            <tr>
-                                <td style="padding: 10px 0; font-size: 16px;"><strong>Persone:</strong></td>
-                                <td style="padding: 10px 0; font-size: 16px; text-align: right;">{booking_details['guests']}</td>
-                            </tr>
-                        </table>
-
-                        <p style="font-size: 16px; line-height: 1.5; margin-top: 30px;">Grazie per aver scelto Fela! Non vediamo l'ora di accoglierti.</p>
-                        <p style="font-size: 14px; color: #888; margin-top: 25px;">Se hai bisogno di cancellare la tua prenotazione, puoi farlo cliccando sul seguente link: <a href="{cancellation_link}" style="color: #5b5bffff;">Cancella prenotazione</a>.</p>
-                    </td>
-                </tr>
-                <tr>
-                    <td align="center" style="padding: 20px; background-color: #f4f4f4; font-size: 12px; color: #777;">
-                        <p style="margin: 0;">Fela! Music Bar | Via di S. Cosimo, 6r, 16128 Genova GE</p>
-                        <p style="margin: 5px 0 0 0;">Questa è un'email generata automaticamente, per favore non rispondere.</p>
-                    </td>
-                </tr>
-            </table>
-        </body>
-        </html>
-        """
-
-        # --- Logica di invio con Brevo (Sendinblue) ---
-        configuration = sib_api_v3_sdk.Configuration()
-        configuration.api_key['api-key'] = os.getenv('BREVO_API_KEY')
-
-        api_instance = sib_api_v3_sdk.TransactionalEmailsApi(sib_api_v3_sdk.ApiClient(configuration))
-        
-        sender_email = os.getenv("MAIL_FROM")
-        sender_name = "Fela! Music Bar"
-        
-        send_smtp_email = sib_api_v3_sdk.SendSmtpEmail(
-            to=[{"email": email, "name": booking_details['name']}],
-            sender={"email": sender_email, "name": sender_name},
-            subject="Conferma Prenotazione - Fela! Music Bar",
-            html_content=html_body
-        )
-
-        api_response = api_instance.send_transac_email(send_smtp_email)
-        print(f"Email sent to {email} via Brevo. Message ID: {api_response.message_id}")
-
-    except Exception as e:
-        print(f"An error occurred in send_email_confirmation: {e}")
-    finally:
-        # Chiude la sessione del database, indipendentemente da errori o successo.
-        print("Closing database session for background task.")
-        db.close()
-
-@app.post("/api/bookings", response_model=schemas.Booking)
+@app.post("/api/bookings")
 async def create_booking(booking: schemas.BookingCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     """
     Endpoint per creare una nuova prenotazione.
-    Riceve i dati della prenotazione, li salva nel database e li restituisce.
+    Riceve i dati della prenotazione, li salva nel database e restituisce un messaggio di conferma.
     """
     # --- CONTROLLO SICUREZZA: L'EVENTO È APERTO? ---
     if booking.event_id:
@@ -396,13 +325,8 @@ async def create_booking(booking: schemas.BookingCreate, background_tasks: Backg
     db.commit()
     db.refresh(db_booking)
 
-    # Convertiamo l'oggetto SQLAlchemy in un dizionario usando lo schema corretto
-    booking_data_for_email = schemas.Booking.from_orm(db_booking).model_dump()
-
-    # Aggiunge l'invio dell'email come task in background
-    background_tasks.add_task(send_email_confirmation, booking.email, booking_data_for_email)
-
-    return db_booking
+    # Restituisce un semplice messaggio di successo invece dell'oggetto prenotazione
+    return {"message": "Prenotazione effettuata"}
 
 # New: Endpoint to handle booking cancellation
 @app.get("/api/bookings/cancel/{token}", status_code=status.HTTP_200_OK)
@@ -432,7 +356,7 @@ def read_root():
 # New: Endpoint for admin page to view bookings
 @app.get("/api/admin/bookings")
 async def get_all_bookings(
-    credentials: HTTPBasicCredentials = Depends(security), 
+    admin: HTTPBasicCredentials = Depends(get_current_admin),
     db: Session = Depends(get_db), 
     skip: int = 0, 
     limit: int = 10,
@@ -457,14 +381,6 @@ async def get_all_bookings(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="ADMIN_PASSWORD non configurata nel backend. Contatta l'amministratore."
-        )
-    
-    # Per semplicità, l'username è fisso a "admin" e controlliamo solo la password.
-    if credentials.username != "admin" or credentials.password != ADMIN_PASSWORD:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Credenziali non valide",
-            headers={"WWW-Authenticate": "Basic"},
         )
     
     query = db.query(models.Booking)
@@ -493,7 +409,7 @@ async def get_all_bookings(
 
 @app.get("/api/bookings/pdf")
 async def export_bookings_to_pdf(
-    credentials: HTTPBasicCredentials = Depends(security),
+    admin: HTTPBasicCredentials = Depends(get_current_admin),
     db: Session = Depends(get_db),
     event_date: Optional[date] = None,
     event_time: Optional[time] = None,
@@ -504,12 +420,6 @@ async def export_bookings_to_pdf(
     Endpoint protetto per esportare le prenotazioni in un file PDF.
     Accetta gli stessi parametri di filtro di /api/admin/bookings.
     """
-    if not ADMIN_PASSWORD or credentials.username != "admin" or credentials.password != ADMIN_PASSWORD:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Credenziali non valide",
-            headers={"WWW-Authenticate": "Basic"},
-        )
 
     query = db.query(models.Booking)
     # Determina il titolo del PDF in base ai filtri
