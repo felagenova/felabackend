@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 from dotenv import load_dotenv
 import sib_api_v3_sdk # Per le email
+from sib_api_v3_sdk.rest import ApiException # Importa la classe di eccezione corretta
 from datetime import time, date, timedelta, datetime # Aggiunto datetime
 from io import BytesIO
 from reportlab.pdfgen import canvas
@@ -217,7 +218,7 @@ def send_booking_confirmation_email(
     try:
         api_response = transactional_emails_api.send_transac_email(send_smtp_email)
         print(f"Email di conferma inviata a {recipient_email}: {api_response}")
-    except sib_api_v3_sdk.ApiException as e:
+    except ApiException as e:
         print(f"Errore durante l'invio dell'email a {recipient_email}: {e}")
     except Exception as e:
         print(f"Errore generico durante l'invio dell'email a {recipient_email}: {e}")
