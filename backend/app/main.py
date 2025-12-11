@@ -24,6 +24,20 @@ load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
 # Definisci la costante mancante
 MAX_EXPORT_RECORDS = 1000
+BACKEND_BASE_URL = os.getenv("BACKEND_BASE_URL", "https://felabackend.onrender.com") # URL base del backend
+
+# Configure Sendinblue (Brevo) API client
+SENDINBLUE_API_KEY = os.getenv("SENDINBLUE_API_KEY")
+
+if not SENDINBLUE_API_KEY:
+    print("WARNING: SENDINBLUE_API_KEY not found. Email sending will be disabled.")
+    sendinblue_api_client = None
+    transactional_emails_api = None
+else:
+    configuration = sib_api_v3_sdk.Configuration()
+    configuration.api_key['api-key'] = SENDINBLUE_API_KEY
+    sendinblue_api_client = sib_api_v3_sdk.ApiClient(configuration)
+    transactional_emails_api = sib_api_v3_sdk.TransactionalEmailsApi(sendinblue_api_client)
 
 from . import models, schemas, database
 from .database import engine, get_db
@@ -139,6 +153,75 @@ async def signup_to_mailing_list(signup_data: MailingListSignup):
             detail="Impossibile completare l'iscrizione alla mailing list in questo momento."
         )
 
+def send_booking_confirmation_email(
+    recipient_email: str,
+    booking_summary: dict,
+    cancellation_link: str
+):
+    """
+    Invia un'email di conferma prenotazione con i dettagli e un link di cancellazione.
+    """
+    if not transactional_emails_api:
+        print(f"Email sending disabled. Not sending confirmation to {recipient_email}.")
+        return
+
+    sender_email = os.getenv("SENDER_EMAIL", "fela.booker@gmail.com") # Get sender email from env or use default
+    sender_name = os.getenv("SENDER_NAME", "Fela! Music Bar")
+
+    subject = "Conferma Prenotazione Fela! Music Bar"
+
+    # Costruisci il contenuto HTML per l'email
+    html_content = f"""
+    <html>
+    <head>
+        <style>
+            body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
+            .container {{ max-width: 600px; margin: 20px auto; padding: 20px; border: 1px solid #ddd; border-radius: 8px; background-color: #f9f9f9; }}
+            h2 {{ color: #d9534f; }}
+            p {{ margin-bottom: 10px; }}
+            .summary-item {{ margin-bottom: 5px; }}
+            .button {{ display: inline-block; background-color: #d9534f; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; margin-top: 20px; }}
+            .footer {{ margin-top: 30px; font-size: 0.9em; color: #777; text-align: center; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h2>Grazie per la tua prenotazione al Fela! Music Bar!</h2>
+            <p>Ciao {booking_summary['name']},</p>
+            <p>La tua prenotazione è stata confermata con successo. Ecco un riepilogo dei dettagli:</p>
+            <div class="summary-item"><strong>Evento:</strong> {booking_summary['event_name']}</div>
+            <div class="summary-item"><strong>Data:</strong> {booking_summary['booking_date']}</div>
+            <div class="summary-item"><strong>Ora:</strong> {booking_summary['booking_time']}</div>
+            <div class="summary-item"><strong>Ospiti:</strong> {booking_summary['guests']}</div>
+            <div class="summary-item"><strong>Note:</strong> {booking_summary['notes'] if booking_summary['notes'] else 'Nessuna'}</div>
+            
+            <p>Se hai bisogno di cancellare la tua prenotazione, puoi farlo cliccando sul link qui sotto:</p>
+            <a href="{cancellation_link}" class="button">Cancella la mia prenotazione</a>
+            
+            <div class="footer">
+                <p>Ti aspettiamo al Fela! Music Bar.</p>
+                <p>Via di S. Cosimo, 6r, 16128 Genova GE</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+
+    send_smtp_email = sib_api_v3_sdk.SendSmtpEmail(
+        sender={"name": sender_name, "email": sender_email},
+        to=[{"email": recipient_email}],
+        subject=subject,
+        html_content=html_content
+    )
+
+    try:
+        api_response = transactional_emails_api.send_transac_email(send_smtp_email)
+        print(f"Email di conferma inviata a {recipient_email}: {api_response}")
+    except sib_api_v3_sdk.ApiException as e:
+        print(f"Errore durante l'invio dell'email a {recipient_email}: {e}")
+    except Exception as e:
+        print(f"Errore generico durante l'invio dell'email a {recipient_email}: {e}")
+
 @app.get("/api/bookable-events")
 def get_bookable_events(db: Session = Depends(get_db)):
     """
@@ -167,13 +250,14 @@ def get_bookable_events(db: Session = Depends(get_db)):
 
     # Ordina gli eventi per data
     def sort_key(event):
-        event_time_str = event.get('booking_time')
-        if event_time_str is None and event.get('type') == 'brunch':
-            event_time_str = event['available_slots'][0] if event['available_slots'] else '00:00:00'
-        elif event_time_str is None:
-            event_time_str = '00:00:00' # Default per eventi senza orario
-
-        return (event['booking_date'], event_time_str)
+        # Usa l'orario dell'evento se presente, altrimenti un orario di default per l'ordinamento
+        event_time_for_sort = event.get('booking_time') or '00:00:00'
+        
+        # Se ci sono turni, usa il primo per l'ordinamento per raggruppare correttamente
+        if event.get('available_slots'):
+            event_time_for_sort = event['available_slots'][0]
+            
+        return (event['booking_date'], event_time_for_sort)
     events.sort(key=sort_key)
     return events
 
@@ -326,8 +410,30 @@ async def create_booking(booking: schemas.BookingCreate, background_tasks: Backg
     db.commit()
     db.refresh(db_booking)
 
-    # Restituisce un semplice messaggio di successo invece dell'oggetto prenotazione
-    return {"message": "Prenotazione effettuata"}
+    # --- Prepara e invia l'email di conferma in background ---
+    # Costruisci il link di cancellazione usando l'URL base del backend
+    cancellation_url = f"{BACKEND_BASE_URL}/api/bookings/cancel/{db_booking.cancellation_token}"
+
+    # Prepara il riepilogo della prenotazione
+    event_name = "Brunch" # Default per brunch
+    if db_booking.event_id:
+        event = db.query(models.SpecialEvent).filter(models.SpecialEvent.id == db_booking.event_id).first()
+        if event:
+            event_name = event.display_name
+
+    booking_summary = {
+        "name": db_booking.name,
+        "event_name": event_name,
+        "booking_date": db_booking.booking_date.strftime('%d/%m/%Y'),
+        "booking_time": db_booking.booking_time.strftime('%H:%M') if db_booking.booking_time else "N/D",
+        "guests": db_booking.guests,
+        "notes": db_booking.notes
+    }
+
+    background_tasks.add_task(send_booking_confirmation_email, recipient_email=db_booking.email, booking_summary=booking_summary, cancellation_link=cancellation_url)
+
+    # Restituisce un messaggio di successo che include l'informazione sull'email
+    return {"message": "Prenotazione effettuata. Riceverai una email di conferma."}
 
 # New: Endpoint to handle booking cancellation
 @app.get("/api/bookings/cancel/{token}", status_code=status.HTTP_200_OK)
