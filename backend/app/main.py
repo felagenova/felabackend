@@ -318,18 +318,6 @@ async def read_special_events(
     response_events = [schemas.SpecialEvent.from_orm(event) for event in events]
     return response_events
 
-@app.post("/api/admin/reset-database-dangerous")
-async def reset_database(
-    admin: HTTPBasicCredentials = Depends(get_current_admin)
-):
-    """
-    ATTENZIONE: CANCELLA E RICREA IL DATABASE.
-    Utile se non si ha accesso alla shell per aggiornare lo schema (migrazioni).
-    """
-    models.Base.metadata.drop_all(bind=engine)
-    models.Base.metadata.create_all(bind=engine)
-    return {"message": "Database resettato completamente. Le nuove colonne sono state create."}
-
 @app.patch("/api/admin/special-events/{event_id}/toggle-status", response_model=schemas.SpecialEvent)
 async def toggle_event_status(
     event_id: int,
