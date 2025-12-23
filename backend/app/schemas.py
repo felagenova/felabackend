@@ -29,6 +29,7 @@ class SpecialEventBase(BaseModel):
     booking_date: date
     booking_time: Optional[time] = None
     available_slots: Optional[List[str]] = None # NUOVO: per i turni
+    max_guests: Optional[int] = None # NUOVO: numero massimo di posti
     is_closed: bool = False # NUOVO
 
 class SpecialEventCreate(SpecialEventBase):

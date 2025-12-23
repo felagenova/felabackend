@@ -318,6 +318,18 @@ async def read_special_events(
     response_events = [schemas.SpecialEvent.from_orm(event) for event in events]
     return response_events
 
+@app.post("/api/admin/reset-database-dangerous")
+async def reset_database(
+    admin: HTTPBasicCredentials = Depends(get_current_admin)
+):
+    """
+    ATTENZIONE: CANCELLA E RICREA IL DATABASE.
+    Utile se non si ha accesso alla shell per aggiornare lo schema (migrazioni).
+    """
+    models.Base.metadata.drop_all(bind=engine)
+    models.Base.metadata.create_all(bind=engine)
+    return {"message": "Database resettato completamente. Le nuove colonne sono state create."}
+
 @app.patch("/api/admin/special-events/{event_id}/toggle-status", response_model=schemas.SpecialEvent)
 async def toggle_event_status(
     event_id: int,
@@ -390,9 +402,25 @@ async def create_booking(booking: schemas.BookingCreate, background_tasks: Backg
     # --- LOGICA DI CONTROLLO POSTI FLESSIBILE ---
     MAX_GUESTS = 25
     BRUNCH_SLOTS = [time(12, 0), time(13, 30)]
+    
+    current_max_guests = MAX_GUESTS
 
-    # Se la prenotazione è per un turno del brunch, controlla la capienza di quello specifico turno.
-    if booking.booking_time in BRUNCH_SLOTS:
+    # 1. Se è un EVENTO SPECIALE, usiamo la sua logica specifica
+    if booking.event_id:
+        event = db.query(models.SpecialEvent).filter(models.SpecialEvent.id == booking.event_id).first()
+        # Se l'evento ha un limite specifico impostato, usiamo quello
+        if event and event.max_guests is not None:
+            current_max_guests = event.max_guests
+            
+        # Contiamo solo le prenotazioni per questo specifico evento
+        booked_guests = db.query(func.sum(models.Booking.guests)).filter(
+            models.Booking.event_id == booking.event_id
+        ).scalar() or 0
+        
+        error_context = "per questo evento"
+
+    # 2. Se è un BRUNCH (Standard), controlla la capienza del turno
+    elif booking.booking_time in BRUNCH_SLOTS:
         booked_guests = db.query(func.sum(models.Booking.guests)).filter(
             models.Booking.booking_date == booking.booking_date,
             models.Booking.booking_time == booking.booking_time
@@ -400,7 +428,7 @@ async def create_booking(booking: schemas.BookingCreate, background_tasks: Backg
         
         error_context = f"per il turno delle {booking.booking_time.strftime('%H:%M')}"
         
-    # Altrimenti, se è per un evento serale, controlla la capienza totale della giornata (escludendo il brunch).
+    # 3. Altrimenti, SERATA STANDARD (esclude il brunch)
     else:
         booked_guests = db.query(func.sum(models.Booking.guests)).filter(
             models.Booking.booking_date == booking.booking_date,
@@ -413,8 +441,8 @@ async def create_booking(booking: schemas.BookingCreate, background_tasks: Backg
     total_guests_if_booked = booked_guests + booking.guests
 
     # Se si supera la capienza, restituisci un errore specifico.
-    if total_guests_if_booked > MAX_GUESTS:
-        available_slots = MAX_GUESTS - booked_guests
+    if total_guests_if_booked > current_max_guests:
+        available_slots = current_max_guests - booked_guests
         error_message = f"Spiacenti, non c'è abbastanza posto {error_context}. Posti rimasti: {available_slots}."
         if available_slots <= 0:
             error_message = f"Spiacenti, siamo al completo {error_context}."
