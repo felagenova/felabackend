@@ -406,6 +406,23 @@ async def create_booking(booking: schemas.BookingCreate, background_tasks: Backg
         ).scalar() or 0
         
         error_context = "per questo evento"
+        
+        # --- NUOVO: Controllo Capienza Specifica del Turno ---
+        # Se l'evento ha capacità specifiche per i turni e la prenotazione ha un orario
+        if event.slot_capacities and booking.booking_time:
+            time_str = booking.booking_time.strftime('%H:%M')
+            # Controlla se esiste un limite per questo specifico orario
+            if time_str in event.slot_capacities:
+                slot_max = event.slot_capacities[time_str]
+                
+                # Conta quanti ospiti ci sono GIÀ per questo specifico turno
+                slot_booked = db.query(func.sum(models.Booking.guests)).filter(
+                    models.Booking.event_id == booking.event_id,
+                    models.Booking.booking_time == booking.booking_time
+                ).scalar() or 0
+                
+                if slot_booked + booking.guests > slot_max:
+                    raise HTTPException(status_code=400, detail=f"Spiacenti, non c'è abbastanza posto per il turno delle {time_str}. Posti rimasti nel turno: {slot_max - slot_booked}.")
 
     # 2. Se è un BRUNCH (Standard), controlla la capienza del turno
     elif booking.booking_time in BRUNCH_SLOTS:

@@ -27,6 +27,7 @@ class SpecialEvent(Base):
     booking_time = Column(Time, nullable=True) # L'ora può essere opzionale per alcuni eventi
     available_slots = Column(JSON, nullable=True) # NUOVO: per salvare i turni
     max_guests = Column(Integer, nullable=True) # NUOVO: numero massimo di posti per l'evento
+    slot_capacities = Column(JSON, nullable=True) # NUOVO: capacità specifiche per turno
     is_closed = Column(Boolean, default=False, nullable=False) # NUOVO: per chiudere le prenotazioni
 
     bookings = relationship("Booking", back_populates="event") # Relazione inversa con Booking
