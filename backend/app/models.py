@@ -1,5 +1,6 @@
 from sqlalchemy import Column, Integer, String, Date, Time, ForeignKey, Boolean, JSON
 from .database import Base
+from sqlalchemy.sql import func
 import uuid
 from sqlalchemy.orm import relationship
 
@@ -16,6 +17,7 @@ class Booking(Base):
     guests = Column(Integer)
     cancellation_token = Column(String, unique=True, index=True, default=lambda: str(uuid.uuid4()))
     notes = Column(String, nullable=True)
+    push_subscription = Column(JSON, nullable=True) # NUOVO: Salva i dati di iscrizione push per questa prenotazione
 
     event = relationship("SpecialEvent", back_populates="bookings") # Relazione con SpecialEvent
 
@@ -31,3 +33,12 @@ class SpecialEvent(Base):
     is_closed = Column(Boolean, default=False, nullable=False) # NUOVO: per chiudere le prenotazioni
 
     bookings = relationship("Booking", back_populates="event") # Relazione inversa con Booking
+
+class PushSubscription(Base):
+    """Tabella per le iscrizioni alle notifiche generali (es. programma lunedì, nuovi eventi)"""
+    __tablename__ = "push_subscriptions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    endpoint = Column(String, unique=True, index=True)
+    keys = Column(JSON) # Salva p256dh e auth
+    created_at = Column(Date, default=func.now())

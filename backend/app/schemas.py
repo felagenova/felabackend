@@ -1,7 +1,7 @@
 from pydantic import BaseModel, EmailStr
 from datetime import date, time
 import uuid
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 
 # Schema per la creazione di una prenotazione (dati in input dall'API)
 class BookingCreate(BaseModel):
@@ -13,6 +13,7 @@ class BookingCreate(BaseModel):
     booking_time: Optional[time] = None
     guests: int
     notes: Optional[str] = None
+    push_subscription: Optional[Dict[str, Any]] = None # NUOVO: Dati per la notifica push
 
 # Schema per la lettura di una prenotazione (dati in output dall'API)
 class Booking(BookingCreate):
@@ -40,3 +41,8 @@ class SpecialEvent(SpecialEventBase):
     id: int
     class Config:
         from_attributes = True
+
+# Schema per l'iscrizione alle notifiche generali
+class PushSubscriptionCreate(BaseModel):
+    endpoint: str
+    keys: Dict[str, str]

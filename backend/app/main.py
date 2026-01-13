@@ -19,6 +19,11 @@ import gspread
 from google.oauth2.service_account import Credentials
 from pydantic import EmailStr
 
+# Import per Notifiche Push e Scheduler
+from pywebpush import webpush, WebPushException
+from apscheduler.schedulers.background import BackgroundScheduler
+import json
+
 # Carica le variabili d'ambiente dal file .env all'inizio di tutto
 load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
@@ -41,6 +46,14 @@ else:
     sendinblue_api_client = sib_api_v3_sdk.ApiClient(configuration)
     transactional_emails_api = sib_api_v3_sdk.TransactionalEmailsApi(sendinblue_api_client)
 
+# Configurazione VAPID per Web Push
+VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY")
+VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY")
+VAPID_MAILTO = os.getenv("VAPID_MAILTO", "mailto:admin@example.com")
+
+if not VAPID_PRIVATE_KEY or not VAPID_PUBLIC_KEY:
+    print("WARNING: VAPID keys not found. Push notifications will be disabled.")
+
 from . import models, schemas, database
 from .database import engine, get_db
 
@@ -53,6 +66,10 @@ async def startup_event():
         # Crea le tabelle nel database (se non esistono) all'avvio dell'applicazione
         models.Base.metadata.create_all(bind=engine)
         print("Database tables checked/created successfully.")
+        
+        # Avvia lo scheduler per le notifiche programmate
+        scheduler.start()
+        print("Scheduler started.")
     except Exception as e:
         print(f"ERROR during database startup: {e}")
         # Rilancia l'eccezione per impedire l'avvio dell'app con un DB non funzionante
@@ -60,6 +77,11 @@ async def startup_event():
 
 # --- NUOVO: Configurazione per Google Sheets ---
 try:
+    # Verifica se il file credentials esiste prima di provare ad usarlo
+    creds_path = os.path.join(os.path.dirname(__file__), '..', 'credentials.json')
+    if not os.path.exists(creds_path):
+        raise FileNotFoundError("File credentials.json non trovato")
+
     SCOPE = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive.file"
@@ -122,6 +144,102 @@ app.add_middleware(
     expose_headers=["Content-Disposition"], # Permette al JS di leggere l'header per il nome del file
 )
 
+# --- SISTEMA DI NOTIFICHE PUSH ---
+
+scheduler = BackgroundScheduler()
+
+def send_web_push(subscription_info, message_body):
+    """Funzione helper per inviare una notifica push."""
+    if not VAPID_PRIVATE_KEY:
+        return
+    
+    try:
+        webpush(
+            subscription_info=subscription_info,
+            data=json.dumps(message_body),
+            vapid_private_key=VAPID_PRIVATE_KEY,
+            vapid_claims={"sub": VAPID_MAILTO}
+        )
+    except WebPushException as ex:
+        print(f"Web Push Failed: {ex}")
+        # Se l'endpoint non è più valido (410), bisognerebbe rimuoverlo dal DB, 
+        # ma per semplicità qui logghiamo solo l'errore.
+    except Exception as e:
+        print(f"Generic Push Error: {e}")
+
+def broadcast_notification(message_body, db: Session):
+    """Invia una notifica a tutti gli iscritti generali."""
+    subscriptions = db.query(models.PushSubscription).all()
+    print(f"Broadcasting notification to {len(subscriptions)} subscribers...")
+    for sub in subscriptions:
+        # Ricostruisce l'oggetto subscription nel formato richiesto da pywebpush
+        sub_info = {
+            "endpoint": sub.endpoint,
+            "keys": sub.keys
+        }
+        send_web_push(sub_info, message_body)
+
+# --- JOB SCHEDULATI ---
+
+def scheduled_monday_notification():
+    """Invia notifica ogni lunedì alle 18:00."""
+    print("Running scheduled job: Monday Program Notification")
+    # Dobbiamo creare una nuova sessione DB perché siamo in un thread diverso
+    db = database.SessionLocal()
+    try:
+        message = {
+            "title": "Nuovo Programma Settimanale!",
+            "body": "Il programma della settimana è uscito su Instagram. Corri a vederlo!",
+            "url": "https://www.instagram.com/felamusicbar/" # Link alla pagina IG
+        }
+        broadcast_notification(message, db)
+    finally:
+        db.close()
+
+def scheduled_booking_reminder():
+    """Invia promemoria alle 10:30 per gli eventi di oggi."""
+    print("Running scheduled job: Daily Booking Reminder")
+    db = database.SessionLocal()
+    try:
+        today = date.today()
+        # Trova tutte le prenotazioni per oggi che hanno una sottoscrizione push salvata
+        bookings_today = db.query(models.Booking).filter(
+            models.Booking.booking_date == today,
+            models.Booking.push_subscription.isnot(None)
+        ).all()
+
+        for booking in bookings_today:
+            # Determina il nome dell'evento
+            event_name = "il tuo evento"
+            if booking.event:
+                event_name = booking.event.display_name
+            elif booking.booking_time in [time(12, 0), time(13, 30)]:
+                event_name = "il Brunch"
+            
+            message = {
+                "title": "Promemoria Prenotazione Fela!",
+                "body": f"Ciao {booking.name}, ti ricordiamo la tua prenotazione per {event_name} oggi alle {booking.booking_time.strftime('%H:%M')}.",
+                "url": "https://felagenova.github.io"
+            }
+            
+            # Invia la notifica specifica a questo utente
+            send_web_push(booking.push_subscription, message)
+            
+    finally:
+        db.close()
+
+# Aggiungi i job allo scheduler
+# Lunedì alle 18:00
+scheduler.add_job(scheduled_monday_notification, 'cron', day_of_week='mon', hour=18, minute=0)
+# Tutti i giorni alle 10:30
+scheduler.add_job(scheduled_booking_reminder, 'cron', hour=10, minute=30)
+
+
+@app.on_event("shutdown")
+def shutdown_event():
+    scheduler.shutdown()
+    print("Scheduler shut down.")
+
 # --- NUOVO: Endpoint per l'iscrizione alla Mailing List ---
 @app.post("/api/mailing-list-signup", status_code=status.HTTP_201_CREATED)
 async def signup_to_mailing_list(signup_data: MailingListSignup):
@@ -154,6 +272,26 @@ async def signup_to_mailing_list(signup_data: MailingListSignup):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Impossibile completare l'iscrizione alla mailing list in questo momento."
         )
+
+# --- NUOVO: Endpoint per l'iscrizione alle Notifiche Push Generali ---
+@app.post("/api/push-subscribe", status_code=status.HTTP_201_CREATED)
+async def subscribe_to_push(subscription: schemas.PushSubscriptionCreate, db: Session = Depends(get_db)):
+    """
+    Salva una sottoscrizione push per le notifiche generali (broadcast).
+    """
+    # Controlla se esiste già
+    existing_sub = db.query(models.PushSubscription).filter(models.PushSubscription.endpoint == subscription.endpoint).first()
+    if existing_sub:
+        # Aggiorna le chiavi se necessario
+        existing_sub.keys = subscription.keys
+        db.commit()
+        return {"message": "Sottoscrizione aggiornata."}
+    
+    new_sub = models.PushSubscription(endpoint=subscription.endpoint, keys=subscription.keys)
+    db.add(new_sub)
+    db.commit()
+    return {"message": "Iscrizione alle notifiche avvenuta con successo!"}
+
 
 def send_booking_confirmation_email(
     recipient_email: str,
@@ -284,7 +422,8 @@ def get_bookable_events(db: Session = Depends(get_db)):
 async def create_special_event(
     event: schemas.SpecialEventCreate,
     admin: HTTPBasicCredentials = Depends(get_current_admin),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    background_tasks: BackgroundTasks = BackgroundTasks() # Aggiunto per le notifiche
 ):
     """Crea un nuovo evento speciale."""
     
@@ -298,6 +437,16 @@ async def create_special_event(
     db.add(db_event)
     db.commit()
     db.refresh(db_event)
+
+    # --- NOTIFICA PUSH: NUOVO EVENTO ---
+    # Invia una notifica a tutti gli iscritti
+    message = {
+        "title": "Nuovo Evento da Fela!",
+        "body": f"È stato annunciato un nuovo evento: {db_event.display_name} il {db_event.booking_date.strftime('%d/%m')}. Prenota ora!",
+        "url": "https://felagenova.github.io"
+    }
+    background_tasks.add_task(broadcast_notification, message, db)
+
     return db_event
 
 @app.get("/api/admin/special-events", response_model=List[schemas.SpecialEvent])
@@ -482,6 +631,16 @@ async def create_booking(booking: schemas.BookingCreate, background_tasks: Backg
     }
 
     background_tasks.add_task(send_booking_confirmation_email, recipient_email=db_booking.email, booking_summary=booking_summary, cancellation_link=cancellation_url)
+
+    # --- NOTIFICA PUSH: CONFERMA PRENOTAZIONE ---
+    # Se la prenotazione include i dati di sottoscrizione push, invia una notifica immediata
+    if booking.push_subscription:
+        push_message = {
+            "title": "Prenotazione Confermata!",
+            "body": f"Grazie {booking.name}, la tua prenotazione per il {booking.booking_date.strftime('%d/%m')} è confermata.",
+            "url": cancellation_url # Cliccando si va ai dettagli/cancellazione
+        }
+        background_tasks.add_task(send_web_push, booking.push_subscription, push_message)
 
     # Restituisce un messaggio di successo che include l'informazione sull'email
     return {"message": "Prenotazione effettuata. Riceverai una email di conferma."}
