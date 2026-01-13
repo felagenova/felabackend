@@ -77,24 +77,34 @@ async def startup_event():
 
 # --- NUOVO: Configurazione per Google Sheets ---
 try:
-    # Verifica se il file credentials esiste prima di provare ad usarlo
-    creds_path = os.path.join(os.path.dirname(__file__), '..', 'credentials.json')
-    if not os.path.exists(creds_path):
-        raise FileNotFoundError("File credentials.json non trovato")
-
     SCOPE = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive.file"
     ]
-    CREDENTIALS_FILE = os.path.join(os.path.dirname(__file__), '..', 'credentials.json')
-    creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=SCOPE)
+
+    # 1. Prova a caricare le credenziali dalla variabile d'ambiente (per Render)
+    google_creds_json = os.getenv("GOOGLE_SHEETS_CREDENTIALS")
+    
+    if google_creds_json:
+        print("Caricamento credenziali Google Sheets da variabile d'ambiente...")
+        creds_dict = json.loads(google_creds_json)
+        creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPE)
+    else:
+        # 2. Fallback al file locale (per sviluppo)
+        creds_path = os.path.join(os.path.dirname(__file__), '..', 'credentials.json')
+        if not os.path.exists(creds_path):
+            raise FileNotFoundError("File credentials.json non trovato e variabile GOOGLE_SHEETS_CREDENTIALS non impostata.")
+        
+        print("Caricamento credenziali Google Sheets da file locale...")
+        creds = Credentials.from_service_account_file(creds_path, scopes=SCOPE)
+
     client = gspread.authorize(creds)
     SHEET_ID = "1GnbUbfP666Gpzvbh9fzStaiakMm4qRoSrClfF4LW6Ck"
     spreadsheet = client.open_by_key(SHEET_ID)
     mailing_list_sheet = spreadsheet.worksheet("Foglio1") # Assicurati che il nome del foglio sia "Foglio1"
     print("Google Sheets client initialized successfully.")
-except FileNotFoundError:
-    print("ERRORE: File 'credentials.json' non trovato. La funzionalità di mailing list non sarà attiva.")
+except FileNotFoundError as e:
+    print(f"ERRORE CONFIGURAZIONE: {e}. La funzionalità di mailing list non sarà attiva.")
     mailing_list_sheet = None
 except Exception as e:
     print(f"ERRORE durante l'inizializzazione di Google Sheets: {e}")
