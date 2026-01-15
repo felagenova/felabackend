@@ -115,6 +115,12 @@ class MailingListSignup(schemas.BaseModel):
     email: EmailStr
     push_subscription: Optional[Dict[str, Any]] = None
 
+# --- NUOVO: Modello per la notifica broadcast manuale ---
+class BroadcastNotificationRequest(schemas.BaseModel):
+    title: str
+    body: str
+    url: Optional[str] = "https://felagenova.github.io"
+
 
 # New: Security for admin page
 security = HTTPBasic()
@@ -520,6 +526,37 @@ async def toggle_event_status(
     db.refresh(event)
     return event
 
+# --- NUOVO: Endpoint per inviare notifiche broadcast manuali ---
+@app.post("/api/admin/broadcast-notification")
+async def send_manual_broadcast(
+    notification: BroadcastNotificationRequest,
+    background_tasks: BackgroundTasks,
+    admin: HTTPBasicCredentials = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Invia una notifica push manuale a tutti gli iscritti.
+    """
+    message = {
+        "title": notification.title,
+        "body": notification.body,
+        "url": notification.url
+    }
+    # Esegui in background per non bloccare la risposta e ottimizzare i tempi di Render
+    background_tasks.add_task(broadcast_notification, message, db)
+    return {"message": "Notifica broadcast in coda per l'invio."}
+
+# --- NUOVO: Endpoint per contare gli iscritti alle notifiche ---
+@app.get("/api/admin/push-subscriptions/count")
+def get_push_subscriptions_count(
+    admin: HTTPBasicCredentials = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """
+    Restituisce il numero totale di sottoscrizioni push attive.
+    """
+    count = db.query(models.PushSubscription).count()
+    return {"count": count}
 
 @app.delete("/api/admin/special-events/{event_id}", response_model=schemas.SpecialEvent)
 async def delete_special_event(
