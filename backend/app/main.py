@@ -10,7 +10,7 @@ from sib_api_v3_sdk.rest import ApiException # Importa la classe di eccezione co
 from datetime import time, date, timedelta, datetime # Aggiunto datetime
 from io import BytesIO
 from reportlab.pdfgen import canvas
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 import os
 from uuid import UUID
 
@@ -113,6 +113,7 @@ except Exception as e:
 # --- NUOVO: Modello Pydantic per la richiesta di iscrizione ---
 class MailingListSignup(schemas.BaseModel):
     email: EmailStr
+    push_subscription: Optional[Dict[str, Any]] = None
 
 
 # New: Security for admin page
@@ -252,10 +253,31 @@ def shutdown_event():
 
 # --- NUOVO: Endpoint per l'iscrizione alla Mailing List ---
 @app.post("/api/mailing-list-signup", status_code=status.HTTP_201_CREATED)
-async def signup_to_mailing_list(signup_data: MailingListSignup):
+async def signup_to_mailing_list(signup_data: MailingListSignup, db: Session = Depends(get_db)):
     """
-    Aggiunge un'email alla mailing list su Google Sheets.
+    Aggiunge un'email alla mailing list su Google Sheets e, se fornita,
+    salva la sottoscrizione per le notifiche push.
     """
+    # --- Salva la sottoscrizione per le notifiche push (se presente) ---
+    if signup_data.push_subscription:
+        try:
+            endpoint = signup_data.push_subscription.get("endpoint")
+            keys = signup_data.push_subscription.get("keys")
+            if endpoint and keys:
+                # Controlla se l'utente è già iscritto alle notifiche generali
+                existing_sub = db.query(models.PushSubscription).filter(models.PushSubscription.endpoint == endpoint).first()
+                if not existing_sub:
+                    new_sub = models.PushSubscription(endpoint=endpoint, keys=keys)
+                    db.add(new_sub)
+                else:
+                    # Aggiorna le chiavi se sono cambiate
+                    existing_sub.keys = keys
+                db.commit()
+        except Exception as e:
+            print(f"ERRORE nel salvataggio della sottoscrizione push dalla mailing list: {e}")
+            db.rollback() # Annulla le modifiche al DB in caso di errore
+
+    # --- Gestione Google Sheets ---
     if not mailing_list_sheet:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -263,15 +285,17 @@ async def signup_to_mailing_list(signup_data: MailingListSignup):
         )
 
     try:
-        # Controlla se l'email è già presente
+        # Controlla se l'email è già presente nel foglio Google
         # Usiamo .get_all_values() per essere sicuri di leggere tutto e gestiamo il caso di foglio vuoto
         all_records = mailing_list_sheet.get_all_values()
         existing_emails = [row[0] for row in all_records if row] # Estrae solo la prima colonna (email)
 
         if signup_data.email in existing_emails:
             # Restituisce un codice 200 OK con un messaggio specifico per l'utente già iscritto
+            # La sottoscrizione push potrebbe essere stata comunque aggiornata, il che è corretto.
             return {"message": "Email già iscritta!"}
 
+        # Aggiunge la nuova email al foglio Google
         timestamp = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         new_row = [signup_data.email, timestamp]
         mailing_list_sheet.append_row(new_row)
