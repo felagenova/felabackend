@@ -326,28 +326,6 @@ async def subscribe_to_push(subscription: schemas.PushSubscriptionCreate, db: Se
     db.commit()
     return {"message": "Iscrizione alle notifiche avvenuta con successo!"}
 
-# --- NUOVO: Endpoint di Debug per inviare una notifica di test a se stessi ---
-@app.post("/api/debug/send-test-notification")
-def send_test_notification(subscription: schemas.PushSubscriptionCreate):
-    """
-    Invia una notifica push immediata alla sottoscrizione fornita nel body.
-    Utile per testare se le chiavi VAPID e il service worker funzionano.
-    """
-    message = {
-        "title": "Test di Funzionamento 🚀",
-        "body": "Se leggi questo messaggio, il sistema di notifiche è configurato correttamente!",
-        "url": "https://felagenova.github.io"
-    }
-    
-    # Adatta il formato per la funzione send_web_push esistente
-    sub_info = {
-        "endpoint": subscription.endpoint,
-        "keys": subscription.keys
-    }
-    
-    send_web_push(sub_info, message)
-    return {"message": "Notifica di test inviata!"}
-
 
 def send_booking_confirmation_email(
     recipient_email: str,
