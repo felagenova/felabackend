@@ -25,6 +25,7 @@ class SpecialEvent(Base):
     __tablename__ = "special_events"
     id = Column(Integer, primary_key=True, index=True)
     display_name = Column(String, index=True)
+    description = Column(String, nullable=True) # NUOVO: Descrizione evento
     booking_date = Column(Date)
     booking_time = Column(Time, nullable=True) # L'ora può essere opzionale per alcuni eventi
     available_slots = Column(JSON, nullable=True) # NUOVO: per salvare i turni

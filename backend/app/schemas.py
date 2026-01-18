@@ -27,6 +27,7 @@ class Booking(BookingCreate):
 # Schemi per gli eventi speciali
 class SpecialEventBase(BaseModel):
     display_name: str
+    description: Optional[str] = None # NUOVO: Descrizione opzionale
     booking_date: date
     booking_time: Optional[time] = None
     available_slots: Optional[List[str]] = None # NUOVO: per i turni
