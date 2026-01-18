@@ -501,12 +501,34 @@ async def update_special_event(
     if not db_event:
         raise HTTPException(status_code=404, detail="Evento non trovato")
     
+    # Cattura i vecchi valori per verificare se data o ora cambiano
+    old_date = db_event.booking_date
+    old_time = db_event.booking_time
+
     # Aggiorna i campi con i nuovi dati
     update_data = event_update.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(db_event, key, value)
     
     db.commit()
+
+    # --- PROPAGAZIONE MODIFICHE ALLE PRENOTAZIONI ---
+    # Se la data è cambiata, aggiorna tutte le prenotazioni associate a questo evento
+    if db_event.booking_date != old_date:
+        db.query(models.Booking).filter(models.Booking.event_id == event_id).update(
+            {models.Booking.booking_date: db_event.booking_date}, 
+            synchronize_session=False
+        )
+        db.commit()
+
+    # Se l'ora è cambiata E l'evento non ha turni multipli (è a orario unico), aggiorna l'ora delle prenotazioni
+    if db_event.booking_time != old_time and not db_event.available_slots:
+         db.query(models.Booking).filter(models.Booking.event_id == event_id).update(
+            {models.Booking.booking_time: db_event.booking_time}, 
+            synchronize_session=False
+        )
+         db.commit()
+
     db.refresh(db_event)
     return db_event
 
