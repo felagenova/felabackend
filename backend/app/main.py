@@ -489,6 +489,27 @@ async def create_special_event(
 
     return db_event
 
+@app.put("/api/admin/special-events/{event_id}", response_model=schemas.SpecialEvent)
+async def update_special_event(
+    event_id: int,
+    event_update: schemas.SpecialEventCreate,
+    admin: HTTPBasicCredentials = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """Aggiorna un evento speciale esistente."""
+    db_event = db.query(models.SpecialEvent).filter(models.SpecialEvent.id == event_id).first()
+    if not db_event:
+        raise HTTPException(status_code=404, detail="Evento non trovato")
+    
+    # Aggiorna i campi con i nuovi dati
+    update_data = event_update.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(db_event, key, value)
+    
+    db.commit()
+    db.refresh(db_event)
+    return db_event
+
 @app.get("/api/admin/special-events", response_model=List[schemas.SpecialEvent])
 async def read_special_events(
     admin: HTTPBasicCredentials = Depends(get_current_admin),
