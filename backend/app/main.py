@@ -205,8 +205,8 @@ def scheduled_weekly_notification():
     db = database.SessionLocal()
     try:
         message = {
-            "title": "Nuovo Programma Settimanale!",
-            "body": "Il programma della settimana è uscito su Instagram. Corri a vederlo!",
+            "title": "Fela! Weekly Program!",
+            "body": "Tutti gli appuntamenti della settimana sono su Instagram!",
             "url": "https://www.instagram.com/felamusicbar/" # Link alla pagina IG
         }
         broadcast_notification(message, db)
@@ -235,7 +235,7 @@ def scheduled_booking_reminder():
             
             message = {
                 "title": "Promemoria Prenotazione Fela!",
-                "body": f"Ciao {booking.name}, ti ricordiamo la tua prenotazione per {event_name} oggi alle {booking.booking_time.strftime('%H:%M')}.",
+                "body": f"Ciao {booking.name}, ci vediamo questa sera per {event_name} alle {booking.booking_time.strftime('%H:%M')}.",
                 "url": "https://felagenova.github.io"
             }
             
