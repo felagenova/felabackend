@@ -198,9 +198,9 @@ def broadcast_notification(message_body, db: Session):
 
 # --- JOB SCHEDULATI ---
 
-def scheduled_monday_notification():
-    """Invia notifica ogni lunedì alle 18:00."""
-    print("Running scheduled job: Monday Program Notification")
+def scheduled_weekly_notification():
+    """Invia notifica ogni martedì alle 18:00."""
+    print("Running scheduled job: Weekly Program Notification")
     # Dobbiamo creare una nuova sessione DB perché siamo in un thread diverso
     db = database.SessionLocal()
     try:
@@ -214,7 +214,7 @@ def scheduled_monday_notification():
         db.close()
 
 def scheduled_booking_reminder():
-    """Invia promemoria alle 10:30 per gli eventi di oggi."""
+    """Invia promemoria alle 12:00 per gli eventi di oggi."""
     print("Running scheduled job: Daily Booking Reminder")
     db = database.SessionLocal()
     try:
@@ -246,10 +246,10 @@ def scheduled_booking_reminder():
         db.close()
 
 # Aggiungi i job allo scheduler
-# Lunedì alle 18:00
-scheduler.add_job(scheduled_monday_notification, 'cron', day_of_week='mon', hour=18, minute=0)
-# Tutti i giorni alle 10:30
-scheduler.add_job(scheduled_booking_reminder, 'cron', hour=10, minute=30)
+# Martedì alle 18:00
+scheduler.add_job(scheduled_weekly_notification, 'cron', day_of_week='tue', hour=15, minute=0)
+# Tutti i giorni alle 12:00
+scheduler.add_job(scheduled_booking_reminder, 'cron', hour=12, minute=0)
 
 
 @app.on_event("shutdown")
