@@ -215,7 +215,6 @@ def broadcast_notification(message_body, db: Session):
 
 def scheduled_weekly_notification():
     """Invia notifica ogni martedì alle 15:00."""
-    """Invia notifica ogni martedì alle 18:00."""
     print("Running scheduled job: Weekly Program Notification")
     # Dobbiamo creare una nuova sessione DB perché siamo in un thread diverso
     db = database.SessionLocal()
@@ -223,7 +222,7 @@ def scheduled_weekly_notification():
         message = {
             "title": "Fela! Weekly Program!",
             "body": "Tutti gli appuntamenti della settimana sono su Instagram!",
-            "url": "https://www.instagram.com/felamusicbar/" # Link alla pagina IG
+            "url": "https://www.instagram.com/fela.genova/" # Link alla pagina IG
         }
         broadcast_notification(message, db)
     finally:
@@ -262,10 +261,10 @@ def scheduled_booking_reminder():
         db.close()
 
 # Aggiungi i job allo scheduler
-# Martedì alle 18:00 (Fuso orario Roma)
+# Martedì alle 15:00 (Fuso orario Roma)
 scheduler.add_job(
     scheduled_weekly_notification, 
-    CronTrigger(day_of_week='tue', hour=18, minute=0, timezone="Europe/Rome"),
+    CronTrigger(day_of_week='tue', hour=15, minute=0, timezone="Europe/Rome"),
     id="weekly_notification",
     replace_existing=True
 )
@@ -759,25 +758,6 @@ async def create_booking(booking: schemas.BookingCreate, background_tasks: Backg
 
 
     db.add(db_booking)
-
-    # --- NUOVO: Salva anche nella lista generale per le notifiche del lunedì/nuovi eventi ---
-    # Se l'utente ha attivato le notifiche prenotando, lo iscriviamo anche al canale broadcast
-    if booking.push_subscription:
-        try:
-            endpoint = booking.push_subscription.get("endpoint")
-            keys = booking.push_subscription.get("keys")
-            if endpoint and keys:
-                # Controlla se l'utente è già iscritto alle notifiche generali
-                existing_sub = db.query(models.PushSubscription).filter(models.PushSubscription.endpoint == endpoint).first()
-                if not existing_sub:
-                    new_sub = models.PushSubscription(endpoint=endpoint, keys=keys)
-                    db.add(new_sub)
-                else:
-                    # Aggiorna le chiavi se necessario (es. se sono cambiate)
-                    existing_sub.keys = keys
-        except Exception as e:
-            print(f"Errore nel salvataggio della sottoscrizione generale: {e}")
-            # Non blocchiamo la prenotazione se fallisce l'iscrizione generale
 
     db.commit()
     db.refresh(db_booking)
