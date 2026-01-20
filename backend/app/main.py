@@ -22,6 +22,7 @@ from pydantic import EmailStr
 # Import per Notifiche Push e Scheduler
 from pywebpush import webpush, WebPushException
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 import json
 
 # Carica le variabili d'ambiente dal file .env all'inizio di tutto
@@ -50,6 +51,10 @@ else:
 VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY")
 VAPID_PUBLIC_KEY = os.getenv("VAPID_PUBLIC_KEY")
 VAPID_MAILTO = os.getenv("VAPID_MAILTO", "mailto:admin@example.com")
+
+# Pulizia preventiva di VAPID_MAILTO per evitare errori comuni (es. copia-incolla con <>)
+if VAPID_MAILTO:
+    VAPID_MAILTO = VAPID_MAILTO.replace("<", "").replace(">", "").strip()
 
 if not VAPID_PRIVATE_KEY or not VAPID_PUBLIC_KEY:
     print("WARNING: VAPID keys not found. Push notifications will be disabled.")
@@ -165,8 +170,8 @@ app.add_middleware(
 
 scheduler = BackgroundScheduler()
 
-def send_web_push(subscription_info, message_body):
-    """Funzione helper per inviare una notifica push."""
+def send_web_push(subscription_info: dict, message_body: str, db: Session):
+    """Funzione helper per inviare una notifica push e gestire le sottoscrizioni scadute."""
     if not VAPID_PRIVATE_KEY:
         return
     
@@ -179,8 +184,22 @@ def send_web_push(subscription_info, message_body):
         )
     except WebPushException as ex:
         print(f"Web Push Failed: {ex}")
-        # Se l'endpoint non è più valido (410), bisognerebbe rimuoverlo dal DB, 
-        # ma per semplicità qui logghiamo solo l'errore.
+        # Se l'endpoint non è più valido (410 Gone), lo cancelliamo dal DB
+        if ex.response and ex.response.status_code == 410:
+            endpoint_to_delete = subscription_info.get("endpoint")
+            if endpoint_to_delete:
+                print(f"Subscription {endpoint_to_delete} has expired. Deleting from DB.")
+                # Cerca e cancella dalla tabella delle sottoscrizioni generali
+                db.query(models.PushSubscription).filter(models.PushSubscription.endpoint == endpoint_to_delete).delete(synchronize_session=False)
+                
+                # Cerca nelle prenotazioni e imposta il campo a NULL invece di cancellare la prenotazione
+                db.query(models.Booking).filter(
+                    models.Booking.push_subscription['endpoint'].astext == endpoint_to_delete
+                ).update(
+                    {models.Booking.push_subscription: None}, 
+                    synchronize_session=False
+                )
+                db.commit()
     except Exception as e:
         print(f"Generic Push Error: {e}")
 
@@ -189,16 +208,13 @@ def broadcast_notification(message_body, db: Session):
     subscriptions = db.query(models.PushSubscription).all()
     print(f"Broadcasting notification to {len(subscriptions)} subscribers...")
     for sub in subscriptions:
-        # Ricostruisce l'oggetto subscription nel formato richiesto da pywebpush
-        sub_info = {
-            "endpoint": sub.endpoint,
-            "keys": sub.keys
-        }
-        send_web_push(sub_info, message_body)
+        sub_info = {"endpoint": sub.endpoint, "keys": sub.keys}
+        send_web_push(sub_info, message_body, db)
 
 # --- JOB SCHEDULATI ---
 
 def scheduled_weekly_notification():
+    """Invia notifica ogni martedì alle 15:00."""
     """Invia notifica ogni martedì alle 18:00."""
     print("Running scheduled job: Weekly Program Notification")
     # Dobbiamo creare una nuova sessione DB perché siamo in un thread diverso
@@ -246,10 +262,20 @@ def scheduled_booking_reminder():
         db.close()
 
 # Aggiungi i job allo scheduler
-# Martedì alle 18:00
-scheduler.add_job(scheduled_weekly_notification, 'cron', day_of_week='tue', hour=15, minute=0)
-# Tutti i giorni alle 12:00
-scheduler.add_job(scheduled_booking_reminder, 'cron', hour=12, minute=0)
+# Martedì alle 18:00 (Fuso orario Roma)
+scheduler.add_job(
+    scheduled_weekly_notification, 
+    CronTrigger(day_of_week='tue', hour=18, minute=0, timezone="Europe/Rome"),
+    id="weekly_notification",
+    replace_existing=True
+)
+# Tutti i giorni alle 12:00 (Fuso orario Roma)
+scheduler.add_job(
+    scheduled_booking_reminder, 
+    CronTrigger(hour=12, minute=0, timezone="Europe/Rome"),
+    id="daily_reminder",
+    replace_existing=True
+)
 
 
 @app.on_event("shutdown")
@@ -589,7 +615,7 @@ async def send_manual_broadcast(
     background_tasks.add_task(broadcast_notification, message, db)
     return {"message": "Notifica broadcast in coda per l'invio."}
 
-# --- NUOVO: Endpoint per contare gli iscritti alle notifiche ---
+# --- NUOVO: Endpoint otiper contare gli iscritti alle notifiche ---
 @app.get("/api/admin/push-subscriptions/count")
 def get_push_subscriptions_count(
     admin: HTTPBasicCredentials = Depends(get_current_admin),
@@ -600,6 +626,18 @@ def get_push_subscriptions_count(
     """
     count = db.query(models.PushSubscription).count()
     return {"count": count}
+
+# --- NUOVO: Endpoint per resettare le sottoscrizioni (utile se si cambiano chiavi VAPID) ---
+@app.delete("/api/admin/push-subscriptions/reset")
+def reset_push_subscriptions(
+    admin: HTTPBasicCredentials = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """Cancella tutte le sottoscrizioni push e le rimuove dalle prenotazioni."""
+    db.query(models.PushSubscription).delete()
+    db.query(models.Booking).update({models.Booking.push_subscription: None})
+    db.commit()
+    return {"message": "Tutte le sottoscrizioni push sono state resettate."}
 
 @app.delete("/api/admin/special-events/{event_id}", response_model=schemas.SpecialEvent)
 async def delete_special_event(
@@ -774,12 +812,20 @@ async def create_booking(booking: schemas.BookingCreate, background_tasks: Backg
             "body": f"Grazie {booking.name}, la tua prenotazione per il {booking.booking_date.strftime('%d/%m')} è confermata.",
             "url": cancellation_url # Cliccando si va ai dettagli/cancellazione
         }
-        background_tasks.add_task(send_web_push, booking.push_subscription, push_message)
+        
+        # Wrapper per eseguire il task in background con una sessione DB dedicata
+        def send_push_in_background(subscription_info, message):
+            db_bg = database.SessionLocal()
+            try:
+                send_web_push(subscription_info, message, db_bg)
+            finally:
+                db_bg.close()
+
+        background_tasks.add_task(send_push_in_background, booking.push_subscription, push_message)
 
     # Restituisce un messaggio di successo che include l'informazione sull'email
     return {"message": "Prenotazione effettuata. Riceverai una email di conferma."}
-
-# New: Endpoint to handle booking cancellation
+    
 @app.get("/api/bookings/cancel/{token}", status_code=status.HTTP_303_SEE_OTHER)
 def cancel_booking(token: str, db: Session = Depends(get_db)) -> RedirectResponse:
     """
