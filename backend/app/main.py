@@ -462,6 +462,7 @@ def get_bookable_events(db: Session = Depends(get_db)):
                 "type": "special",
                 "id": event.id,
                 "display_name": f"{event.display_name} - {event.booking_date.strftime('%d/%m')}",
+                "description": event.description,
                 "booking_date": event.booking_date.isoformat(),
                 "booking_time": event.booking_time.isoformat() if event.booking_time else None,
                 # Standardizza l'output per i turni, assicurando che sia sempre una lista

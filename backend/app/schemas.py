@@ -40,6 +40,7 @@ class SpecialEventCreate(SpecialEventBase):
 
 class SpecialEvent(SpecialEventBase):
     id: int
+
     class Config:
         from_attributes = True
 

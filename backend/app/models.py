@@ -24,6 +24,7 @@ class Booking(Base):
 class SpecialEvent(Base):
     __tablename__ = "special_events"
     id = Column(Integer, primary_key=True, index=True)
+
     display_name = Column(String, index=True)
     description = Column(String, nullable=True) # NUOVO: Descrizione evento
     booking_date = Column(Date)
@@ -33,7 +34,7 @@ class SpecialEvent(Base):
     slot_capacities = Column(JSON, nullable=True) # NUOVO: capacità specifiche per turno
     is_closed = Column(Boolean, default=False, nullable=False) # NUOVO: per chiudere le prenotazioni
 
-    bookings = relationship("Booking", back_populates="event") # Relazione inversa con Booking
+    bookings = relationship("Booking", back_populates="event")  # Relazione inversa con Booking
 
 class PushSubscription(Base):
     """Tabella per le iscrizioni alle notifiche generali (es. programma lunedì, nuovi eventi)"""
